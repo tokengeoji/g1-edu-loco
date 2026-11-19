@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=g1-jsj-ubuntu:20.04
+ARG BASE_IMAGE=jsj-ubuntu:20.04
 FROM ${BASE_IMAGE}
 
 USER root
@@ -23,7 +23,7 @@ RUN set -eux; \
       ros-foxy-ros-base ros-foxy-sensor-msgs ros-foxy-geometry-msgs \
       ros-foxy-rmw-cyclonedds-cpp ros-foxy-rosidl-generator-dds-idl \
       ros-foxy-rosidl-default-generators python3-colcon-common-extensions \
-      git build-essential gcc-9 g++-9 cmake pkg-config libssl-dev \
+      git iproute2 build-essential gcc-9 g++-9 cmake pkg-config libssl-dev \
       libyaml-cpp-dev libeigen3-dev libboost-all-dev libfmt-dev \
       python3-dev python3-pip python3-numpy python3-opencv; \
     rm -rf /var/lib/apt/lists/*; \
@@ -51,8 +51,12 @@ RUN set -ex; \
       -DCycloneDDS_DIR=/opt/unitree_ros2/cyclonedds_ws/install/lib/cmake/CycloneDDS; \
     rm -rf build log
 
+# Use the same C++ SDK revision as the lab's working g1_health_monitor.
+ARG UNITREE_SDK2_REF=aaf69cb56c9d5ed63d8b284008ec3a8ab999bec1
 RUN set -eux; \
-    git clone --depth 1 https://github.com/unitreerobotics/unitree_sdk2.git /opt/unitree_sdk2; \
+    git init -q /opt/unitree_sdk2; \
+    git -C /opt/unitree_sdk2 fetch --depth 1 https://github.com/unitreerobotics/unitree_sdk2.git "$UNITREE_SDK2_REF"; \
+    git -C /opt/unitree_sdk2 checkout -q --detach FETCH_HEAD; \
     cmake -S /opt/unitree_sdk2 -B /opt/unitree_sdk2/build \
       -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DCMAKE_INSTALL_PREFIX=/opt/unitree_robotics; \
     cmake --build /opt/unitree_sdk2/build --parallel 2; \
@@ -60,10 +64,13 @@ RUN set -eux; \
     rm -rf /opt/unitree_sdk2/build
 
 ENV CYCLONEDDS_HOME=/opt/unitree_ros2/cyclonedds_ws/install
+ARG UNITREE_SDK2_PYTHON_REF=814556d15970dd2ecf1c9984e845ca02ab07e206
 RUN set -eux; \
     python3 -m pip install --upgrade --no-cache-dir 'pip==25.0.1'; \
     python3 -m pip install --no-cache-dir --no-binary=cyclonedds 'cyclonedds==0.10.2'; \
-    git clone --depth 1 https://github.com/unitreerobotics/unitree_sdk2_python.git /opt/unitree_sdk2_python; \
+    git init -q /opt/unitree_sdk2_python; \
+    git -C /opt/unitree_sdk2_python fetch --depth 1 https://github.com/unitreerobotics/unitree_sdk2_python.git "$UNITREE_SDK2_PYTHON_REF"; \
+    git -C /opt/unitree_sdk2_python checkout -q --detach FETCH_HEAD; \
     python3 -m pip install --no-cache-dir --no-deps /opt/unitree_sdk2_python
 
 # Direct docker exec commands (including python3) inherit the same overlay
