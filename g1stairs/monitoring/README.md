@@ -14,7 +14,7 @@ docker exec -it -w /opt/g1-edu-loco jsj-monitor bash
 python3 -m g1stairs.monitoring serve
 ```
 
-기본 주소는 `http://127.0.0.1:8765`입니다. 개발 PC에서 보려면 별도 터미널에서 기존 PC2 SSH 접속 대상에 `ssh -N -L 8765:127.0.0.1:8765 "$G1_PC2_SSH_TARGET"`로 포트를 연결한 뒤 브라우저에서 같은 주소를 엽니다.
+GUI의 기본 수신 주소는 PC2의 `127.0.0.1:8765`입니다.
 
 ## 기록이 필요할 때
 
