@@ -82,14 +82,15 @@ g1 health eth0
 
 원본 C++ 모니터는 DDS 도메인 0을 사용한다. 모터·배터리의 최신 샘플과 온도를 확인하고 측정 중에는 이 터미널을 열어 둔다. [관절·IMU 대시보드와 상태 기록](src/g1stairs/monitoring/README.md)
 
-**컨테이너 내부 · 터미널 2 · 상태 조회와 키 연습**
+**컨테이너 내부 · 터미널 2 · 실제 상태로 키보드 미리보기**
 
 ```bash
-g1 teleop --status --interface eth0 --domain 0
-g1 teleop --dry-run
+g1 teleop --preview --interface eth0 --domain 0
 ```
 
-`--status`는 실제 FSM과 응답한 보행 서비스(`sport` 또는 `loco`)를 표시한다. `--dry-run`은 오프라인 연습이다. `x`로 연습을 끝내면 같은 내부 셸로 돌아온다.
+`--preview`에는 로봇 NIC가 필요하다. 시작 화면에서 Unitree SDK로 읽은 실제 보행 모드(`GetFsmId`), `rt/lowstate` 한 샘플의 `q/dq 수신 29/29`, 왼쪽 무릎의 관절 위치와 속도를 확인한다. 이어지는 키 입력은 그 FSM에서 시작하는 모의 조작이다. 예를 들어 시작값이 4이면 `2` → `Enter`로 모의 FSM을 802로 바꾸고, 이미 802이면 이 단계를 건너뛴다. `f`로 모의 FSM 802, `w`로 전진 요청값 0.15 m/s, `Space`로 속도 0을 확인한 뒤 `x`로 셸에 돌아온다. 키 입력은 기체에 전달되지 않는다.
+
+실제 FSM 조회나 관절 수신이 실패하면 미리보기는 진단 메시지를 출력하고 종료한다. 이 절차로 확인되는 범위는 실제 상태 수신과 키 입력 처리다. `--dry-run`은 기체 연결이 없는 오프라인 연습, `--status`는 실제 FSM 1회 조회, `--live`는 별도로 실행하는 실기체 조작이다. [모드별 용도와 자동 검사](src/g1_teleop/README.md#preview)
 
 첫 실기체 조작 전에 숙련자와 함께 온도·배터리, 기체 지지, 주변 공간과 물리 조종기를 확인한다. 다른 텔레옵 송신기의 실행 여부도 확인한다. **팔 고정이 필수인 실험은 여기서 멈춘다.** 텔레옵은 팔 명령을 보내지 않는다. Unitree가 문서화한 29자유도 Run(FSM 802)에서는 내장 보행기의 팔 흔들림을 끄는 공식 API가 확인되지 않았다. [Unitree 상체 제어 지원 모드](https://github.com/unitreerobotics/xr_teleoperate)
 

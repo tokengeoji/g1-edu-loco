@@ -55,7 +55,7 @@ jsj-g1-tools 컨테이너 안에서 실행
   g1 interfaces                       로봇 네트워크 인터페이스 확인
   g1 health NIC [options]             C++ 모터 온도·배터리 모니터 (DDS 도메인 0)
   g1 monitor COMMAND [options]        웹 대시보드·상태 기록
-  g1 teleop [options]                 키보드 조작 (기본 모의 실행, --status는 기체 상태 조회)
+  g1 teleop [options]                 기본은 오프라인 모의 조작. --preview는 기체 상태를 읽고 입력을 모의 실행
   g1 camera COMMAND [options]         ROS/DDS·USB 탐색, 영상 보기, 깊이 기록·재생
   g1 stairs measure [options]         /workspace/runs의 깊이 기록으로 계단 치수 계산
 HELP

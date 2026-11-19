@@ -29,8 +29,8 @@ FSM 802에서는 내장 보행기가 팔을 흔들 수 있습니다. 키보드�
 
 
 class DryClient:
-    def __init__(self):
-        self.fsm = 802
+    def __init__(self, fsm=802):
+        self.fsm = fsm
 
     def GetFsmId(self):
         return 0, self.fsm
@@ -248,25 +248,26 @@ def poll_queued(fd, keys):
     return priority
 
 
-def show(message):
+def show(message, prefix=""):
     if message:
-        print(message, flush=True)
+        print(prefix + message.replace("\n", "\n" + prefix), flush=True)
 
 
-def interact(controller):
+def interact(controller, *, preview=False):
     fd = sys.stdin.fileno()
     keys = TerminalKeys()
+    prefix = "[모의] " if preview else ""
     with keyboard_terminal(fd):
         try:
-            show(HELP)
-            show("준비 · 방향키로 이동, f로 현재 모드 조회")
+            show(HELP, prefix)
+            show("준비 · 방향키로 이동, f로 현재 모드 조회", prefix)
             pending = None
             while True:
                 if pending is None:
                     message = controller.tick()
                     if message:
                         pending = poll_queued(fd, keys)
-                        show(message)
+                        show(message, prefix)
                 if pending is None:
                     if not select.select([fd], [], [], 0.05)[0]:
                         continue
@@ -276,17 +277,18 @@ def interact(controller):
                     break
                 message = controller.handle("\x1b" if key == "?" else key)
                 pending = poll_queued(fd, keys)
-                show(message)
+                show(message, prefix)
                 if key == "?":
-                    show(HELP)
+                    show(HELP, prefix)
         finally:
-            show(controller.close())
+            show(controller.close(), prefix)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="g1 teleop", description="G1 고수준 보행 키보드 제어")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--live", action="store_true", help="실제 G1 키보드 제어")
+    mode.add_argument("--preview", action="store_true", help="시작 시 실제 FSM·모터 상태를 읽고 키 입력은 모의 실행")
     mode.add_argument("--dry-run", action="store_true", help="오프라인 모의 제어 (기본값)")
     mode.add_argument("--status", action="store_true", help="실제 G1의 현재 FSM을 한 번 조회")
     parser.add_argument("--interface", metavar="NIC", help="G1 연결 인터페이스")
@@ -296,29 +298,42 @@ def main(argv=None):
                         help="GetFsmId로 확인할 로코모션 서비스 (기본 auto)")
     parser.add_argument("--waist-3dof", action="store_true", help="허리 3자유도 모델의 FSM 501 허용")
     args = parser.parse_args(argv)
-    if (args.live or args.status) and not args.interface:
-        parser.error("--live / --status 실행에는 --interface NIC가 필요합니다.")
+    if (args.live or args.preview or args.status) and not args.interface:
+        parser.error("--live / --preview / --status 실행에는 --interface NIC가 필요합니다.")
     if args.domain < 0:
         parser.error("--domain은 0 이상의 정수여야 합니다.")
     if not args.status and not (sys.stdin.isatty() and sys.stdout.isatty()):
         parser.error("키보드 제어에는 대화형 TTY가 필요합니다. Docker에서는 -it를 사용하세요.")
     try:
         with live_session_lock() if args.live else nullcontext():
-            if args.live or args.status:
+            if args.live or args.preview or args.status:
                 network = f"NIC={args.interface} · DDS domain={args.domain}"
                 try:
-                    client, service, fsm = connect(args.domain, args.interface, args.service)
+                    if args.preview:
+                        from .preview import read_robot_snapshot
+                        service, fsm, motors = read_robot_snapshot(
+                            args.interface, args.domain, args.service, discover)
+                    else:
+                        client, service, fsm = connect(args.domain, args.interface, args.service)
                 except Exception as error:
                     raise RuntimeError(f"{network} · service={args.service} · {error}") from error
-                show(f"현재 FSM={fsm} · {network} · service={service}")
+                show(f"현재 FSM={fsm} · {network} · service={service}",
+                     "[시작 시점 실측] " if args.preview else "")
+                if args.preview:
+                    show(f"모터 상태 · {motors}", "[시작 시점 실측] ")
+                    show("FSM과 모터 상태는 시작 시점에만 읽었습니다. 지금부터 키 입력과 f 조회는 모두 모의 실행입니다.")
+                    client = DryClient(fsm)
                 if args.status:
                     return 0
             else:
                 client = DryClient()
                 show(f"오프라인 모의 제어 · 초기 FSM={client.fsm}")
-            interact(Controller(client, waist_3dof=args.waist_3dof))
+            controller = Controller(client, waist_3dof=args.waist_3dof)
+            interact(controller, preview=args.preview)
     except EndSession:
         return 0
+    except KeyboardInterrupt:
+        return 130
     except (OSError, ImportError, RuntimeError, termios.error) as error:
         print(f"텔레오퍼레이션 오류: {error}", file=sys.stderr)
         return 1
