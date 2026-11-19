@@ -28,7 +28,7 @@ SPEED_FACTORS = {
 # integer or a repeated key as an FSM command.
 MODES = {
     "1": ("fsm", 4, "잠금 기립 · 균형 제어 없음 · 기체 지지 확인"),
-    "2": ("fsm", 802, "이 기체의 이동 모드 · FSM 802"),
+    "2": ("fsm", 802, "Run 보행 · FSM 802"),
     "3": ("fsm", 2, "위치 제어 쪼그림 · 균형 제어 없음 · 기체 지지 확인"),
     "4": ("balance", 0, "균형 기립 · 정지·안정 시 제자리걸음 해제"),
     "5": ("balance", 1, "연속 제자리걸음 · 속도 0에서도 발 디딤"),
@@ -45,6 +45,21 @@ MODES = {
 SPEED_LIMITS = {"!": (0, 1.0), "@": (1, 2.0), "#": (2, 2.7), "$": (3, 3.0)}
 GAIT_IDS = (802, 501)
 
+FSM_NAMES = {
+    value: label.partition(" · ")[0] for kind, value, label in MODES.values() if kind == "fsm"
+}
+# These IDs can be reported by GetFsmId even though they have no selection key.
+FSM_NAMES.update({0: "제로 토크", 500: "일반 보행", 1000: "사용자 제어"})
+
+
+def display_fsm(value):
+    name = FSM_NAMES.get(value)
+    return f"{value} ({name})" if name else str(value)
+
+
+class EndSession(BaseException):
+    """Leave the input loop after a deferred terminal signal."""
+
 
 class Controller:
     """Dispatch one fresh key at a time. Merely constructing this class sends nothing."""
@@ -54,6 +69,7 @@ class Controller:
         self.waist_3dof = waist_3dof
         self.clock = clock
         self.linear_scale = self.turn_scale = 1.0
+        self.exit_requested = False
         self._last_move_sent = 0.0
         self._moving_key = None
         self._motion_deadline = 0.0
@@ -72,6 +88,9 @@ class Controller:
 
     def _fsm(self):
         code, value = self.client.GetFsmId()
+        # A signal during GetFsmId invalidates the key that triggered the read.
+        if self.exit_requested:
+            raise EndSession()
         self._check("GetFsmId", code)
         if type(value) is not int or value < 0:
             raise RuntimeError(f"GetFsmId 응답에 유효한 ID가 없습니다: {value!r}")
@@ -94,7 +113,7 @@ class Controller:
         return f"RPC 오류: {error}. 직전 명령을 중단했습니다. 다음 입력에서 기체 상태를 다시 확인합니다."
 
     def _status(self, current):
-        text = f"현재 FSM={current} · 선속도 {self.linear_scale:g}배 · 회전 {self.turn_scale:g}배"
+        text = f"현재 FSM={display_fsm(current)} · 선속도 {self.linear_scale:g}배 · 회전 {self.turn_scale:g}배"
         if current == 500:
             text += " · 이 기체에서 FSM 500 이동은 확인되지 않았습니다. 2 → Enter로 802를 선택하세요."
         if self._awaiting_fsm is not None:
@@ -158,6 +177,8 @@ class Controller:
         self._last_move_sent = now
         vx, vy, yaw = VELOCITY[key]
         vx, vy, yaw = vx * self.linear_scale, vy * self.linear_scale, yaw * self.turn_scale
+        if self.exit_requested:
+            raise EndSession()
         self._check("SetVelocity(7105)", self.client.SetVelocity(vx, vy, yaw, duration))
         if not repeated:
             return (f"SetVelocity(7105) 수락 · FSM={current} · "
@@ -239,10 +260,20 @@ class Controller:
             return "키 반복 입력 만료 · 속도 0 요청 수락."
         return None
 
-    def close(self):
+    def close(self, *, force_stop=False):
         self._pending = self._awaiting_fsm = None
-        try:
-            self._stop()
-        except Exception as error:
-            return self._fault(error)
-        return "텔레옵을 종료했습니다."
+        if not (force_stop or self._moving_key):
+            return "텔레옵을 종료했습니다."
+
+        # A lost reply leaves the result uncertain. Retry only the idempotent
+        # zero command, with the SDK's existing finite timeout on both attempts.
+        for attempt in range(2):
+            try:
+                self._stop(force=True)
+                return "종료 정지 · 속도 0 요청 수락. 텔레옵을 종료했습니다."
+            except Exception as error:
+                if attempt == 1:
+                    raise RuntimeError(
+                        f"종료 정지 미확인 · 속도 0 수락을 2회 모두 확인하지 못했습니다 ({error}). "
+                        "물리 조종기로 정지를 확인하세요."
+                    ) from error

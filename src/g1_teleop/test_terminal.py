@@ -113,7 +113,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(client.mock_calls, [])
         details.assert_called_once_with(client)
         self.assertIn("SDK 상태", output.getvalue())
-        self.assertIn("현재 FSM=4 · NIC=eth0 · DDS domain=8 · service=loco", output.getvalue())
+        self.assertIn("현재 FSM=4 (잠금 기립) · NIC=eth0 · DDS domain=8 · service=loco", output.getvalue())
 
     def test_failed_discovery_shows_network_and_rpc_code(self):
         errors = io.StringIO()
@@ -171,8 +171,9 @@ class TerminalLoopTests(unittest.TestCase):
         )
         self.addCleanup(self.reap, self.proc)
         self.output = b""
-        self.await_output("준비 ·", timeout=12)
+        startup = self.await_output("준비 ·", timeout=12)
         self.assertFalse(termios.tcgetattr(slave)[3] & termios.ICANON)
+        return startup
 
     @staticmethod
     def reap(proc):
@@ -190,9 +191,21 @@ class TerminalLoopTests(unittest.TestCase):
         before, _, self.output = self.output.partition(target)
         return before + target
 
-    def assert_restored(self):
-        self.assertEqual(self.proc.wait(timeout=3), 0)
+    def assert_restored(self, status=0):
+        self.assertEqual(self.proc.wait(timeout=3), status)
         self.assertEqual(termios.tcgetattr(self.slave), self.original)
+
+    def test_startup_shows_every_numbered_mode_and_stop_before_any_key(self):
+        startup = " ".join(self.start().decode().split())
+        for binding in ("0 댐핑 (FSM 1)", "1 잠금 기립 (FSM 4)", "2 Run 보행 (FSM 802)",
+                        "3 위치 제어 쪼그림 (FSM 2)", "4 균형 기립 (균형 설정 0)",
+                        "5 연속 제자리걸음 (균형 설정 1)", "6 균형 쪼그림 ↔ 기립 전환 (FSM 706)",
+                        "7/9 의자에 앉기 (FSM 3)", "8 허리 3자유도 보행 (FSM 501)"):
+            self.assertIn(binding, startup)
+        self.assertIn("--waist-3dof", startup)
+        self.assertIn("Ctrl+C 정지 요청 후 종료", startup)
+        os.write(self.master, b"\x04")
+        self.assert_restored()
 
     def test_first_arrow_moves_in_802_then_idle_stop_and_eof_restore_terminal(self):
         self.start()
@@ -245,6 +258,97 @@ raise SystemExit(cli.main())
                 self.proc.send_signal(sig)
                 self.await_output("SetVelocity(0.0, 0.0, 0.0, ")
                 self.assert_restored()
+
+    def start_live_spy(self, *, delay="", zero_code=0):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.velocities = Path(directory.name) / "velocities"
+        self.velocities.touch()
+        return self.start(f"""
+import fcntl
+import os
+import sys
+import termios
+import time
+from {__package__} import __main__ as cli
+
+# Make this slave the child's controlling terminal so writing Ctrl+C to the
+# master exercises VINTR/SIGINT just as it does in an interactive docker exec.
+os.setsid()
+fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+assert os.tcgetpgrp(0) == os.getpgrp()
+
+class SpyClient:
+    def rpc_wait(self):
+        # The SDK future can catch exceptions raised in its blocking wait.
+        try:
+            time.sleep(0.4)
+        except BaseException:
+            pass
+
+    def GetFsmId(self):
+        if {delay!r} == "read":
+            print("reading FSM", flush=True)
+            self.rpc_wait()
+        return 0, 802
+
+    def SetVelocity(self, vx, vy, yaw, duration):
+        command = "move" if any((vx, vy, yaw)) else "zero"
+        with open({str(self.velocities)!r}, "a") as out:
+            print(command, file=out)
+        print("wire " + command, flush=True)
+        if command == {delay!r}:
+            self.rpc_wait()
+        return {zero_code} if command == "zero" else 0
+
+cli.LIVE_LOCK = {str(Path(directory.name) / "lock")!r}
+cli.connect = lambda *args: (SpyClient(), "sport", 802)
+sys.exit(cli.main(["--live", "--interface", "lo", "--domain", "0"]))
+""")
+
+    def test_typed_ctrl_c_during_move_waits_for_zero_even_after_second_interrupt(self):
+        self.start_live_spy(delay="zero")
+        os.write(self.master, b"i")
+        self.await_output("wire move")
+        os.write(self.master, b"\x03")
+        self.await_output("wire zero")
+        os.write(self.master, b"\x03")
+        self.await_output("종료 정지 · 속도 0 요청 수락")
+        self.assert_restored()
+        self.assertEqual(self.velocities.read_text().splitlines(), ["move", "zero"])
+
+    def test_typed_ctrl_c_during_inflight_rpc_finishes_with_zero(self):
+        for operation, marker, expected in [
+            ("read", "reading FSM", ["zero"]),
+            ("move", "wire move", ["move", "zero"]),
+        ]:
+            with self.subTest(operation=operation):
+                self.start_live_spy(delay=operation)
+                os.write(self.master, b"i")
+                self.await_output(marker)
+                os.write(self.master, b"\x03")
+                self.await_output("종료 정지 · 속도 0 요청 수락")
+                self.assert_restored()
+                self.assertEqual(self.velocities.read_text().splitlines(), expected)
+
+    def test_typed_ctrl_c_after_idle_timeout_requests_new_final_zero(self):
+        self.start_live_spy()
+        os.write(self.master, b"i")
+        self.await_output("키 반복 입력 만료")
+        os.write(self.master, b"\x03")
+        self.await_output("종료 정지 · 속도 0 요청 수락")
+        self.assert_restored()
+        self.assertEqual(self.velocities.read_text().splitlines(), ["move", "zero", "zero"])
+
+    def test_failed_final_stop_reports_rpc_code_and_exits_unsuccessfully(self):
+        self.start_live_spy(zero_code=4201)
+        os.write(self.master, b"i")
+        self.await_output("wire move")
+        os.write(self.master, b"\x03")
+        self.await_output("종료 정지 미확인")
+        self.await_output("4201")
+        self.assert_restored(status=1)
+        self.assertEqual(self.velocities.read_text().splitlines(), ["move", "zero", "zero"])
 
     def test_direction_typed_during_slow_rpc_is_not_replayed(self):
         self.start(f"""

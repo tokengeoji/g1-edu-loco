@@ -12,23 +12,38 @@ import time
 import tty
 from contextlib import contextmanager, nullcontext
 
-from .control import Controller, MODES, VELOCITY
+from .control import CONFIRM_SECONDS, Controller, EndSession, MODES, VELOCITY, display_fsm
 
 
-HELP = """   u    i    o       전진하며 좌회전 / 전진 / 전진하며 우회전
+def mode_menu():
+    keys_by_mode = {}
+    for key in sorted(MODES):
+        keys_by_mode.setdefault(MODES[key], []).append(key)
+
+    lines = [f"모드 선택   숫자 → {CONFIRM_SECONDS:g}초 안에 Enter · Esc 취소"]
+    for (kind, value, label), keys in keys_by_mode.items():
+        target = f"FSM {value}" if kind == "fsm" else f"균형 설정 {value}"
+        name = label.partition(" · ")[0]
+        lines.append(f"  {'/'.join(keys):<4}  {name} ({target})")
+    lines.extend([
+        "  4·5는 FSM 500/501에서 사용",
+        "  8은 허리 3자유도 구성 확인 후 --waist-3dof로 실행할 때 사용",
+    ])
+    return "\n".join(lines)
+
+
+HELP = mode_menu() + """
+이동 키
+   u    i    o       전진하며 좌회전 / 전진 / 전진하며 우회전
    j    k    l       좌회전 / 정지 / 우회전
    m    ,    .       후진하며 우회전 / 후진 / 후진하며 좌회전
-Shift+J/L 옆걸음   방향키 ↑↓ 전후진 · ←→ 회전   k 또는 Space 정지
+Shift+J/L 옆걸음   방향키 ↑↓ 전후진 · ←→ 회전
 누르고 있으면 연속 이동 · 마지막 입력 후 최대 1초   q/z 속도 올림/내림
-2 → Enter 보행 모드(802)   f 현재 모드   ? 전체 키   Ctrl+C 종료"""
+k 또는 Space 정지   Ctrl+C 정지 요청 후 종료   f 현재 모드   ? 전체 키"""
 
 EXTRA_HELP = """Shift+U/I/O·J/L·M/</> 회전 없이 전후·좌우 이동
 w/x 직선·옆걸음 속도 올림/내림    e/c 회전 속도 올림/내림
-!/@/#/$ FSM 802 속도 상한 0/1/2/3
-모드 키를 누른 뒤 4초 안에 Enter로 요청 · Esc로 취소
-%s""" % "\n".join(
-    f"  {key}  {mode[2]}" for key, mode in MODES.items()
-)
+!/@/#/$ FSM 802 속도 상한 0/1/2/3"""
 
 
 class DryClient:
@@ -215,21 +230,14 @@ class TerminalKeys:
         return "\x1b"  # Cancel any pending mode when input is ambiguous.
 
 
-class EndSession(BaseException):
-    pass
-
-
 @contextmanager
-def keyboard_terminal(fd):
+def keyboard_terminal(fd, on_signal):
     saved = termios.tcgetattr(fd)
     previous = {}
 
-    def end_session(signum, _frame):
-        raise EndSession(signum)
-
     try:
         for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGTSTP):
-            previous[sig] = signal.signal(sig, end_session)
+            previous[sig] = signal.signal(sig, on_signal)
         tty.setcbreak(fd, termios.TCSAFLUSH)
         # Request bracketed paste from compatible terminals.
         sys.stdout.write("\x1b[?2004h")
@@ -273,17 +281,24 @@ def interact(controller, *, live=False):
     fd = sys.stdin.fileno()
     keys = TerminalKeys()
     prefix = "[실기체] " if live else "[모의] "
-    with keyboard_terminal(fd):
+    def request_exit(_signum, _frame):
+        # The SDK catches exceptions inside its RPC wait. Latch Ctrl+C instead,
+        # and let any ongoing send/receive finish before sending the final zero.
+        controller.exit_requested = True
+
+    with keyboard_terminal(fd, request_exit):
         try:
             show(HELP, prefix)
             show("준비 · i 전진, k 정지", prefix)
             if live:
                 show("키 입력이 기체로 전송됩니다. 802 내장 보행기는 팔을 흔들 수 있습니다.", prefix)
             pending = None
-            while True:
+            while not controller.exit_requested:
                 if pending is None:
                     received_at = time.monotonic()
                     message = controller.tick()
+                    if controller.exit_requested:
+                        break
                     if message:
                         pending = poll_queued(fd, keys, controller.moving_key)
                         show(message, prefix)
@@ -293,10 +308,12 @@ def interact(controller, *, live=False):
                     received_at = time.monotonic()
                     pending = keys.read(os.read(fd, 4096), controller.moving_key)
                 key, pending = pending, None
-                if key == keys.exit_key:
+                if key == keys.exit_key or controller.exit_requested:
                     break
                 started = time.monotonic()
                 message = controller.handle("\x1b" if key == "?" else key, received_at=received_at)
+                if controller.exit_requested:
+                    break
                 pending = poll_queued(fd, keys, controller.moving_key)
                 received_at = started  # An input waiting after the RPC may be this old.
                 show(message, prefix)
@@ -304,7 +321,7 @@ def interact(controller, *, live=False):
                     show(HELP, prefix)
                     show(EXTRA_HELP, prefix)
         finally:
-            show(controller.close(), prefix)
+            show(controller.close(force_stop=live), prefix)
 
 
 def main(argv=None):
@@ -340,7 +357,7 @@ def main(argv=None):
                         client, service, fsm = connect(args.domain, args.interface, args.service)
                 except Exception as error:
                     raise RuntimeError(f"{network} · service={args.service} · {error}") from error
-                show(f"현재 FSM={fsm} · {network} · service={service}",
+                show(f"현재 FSM={display_fsm(fsm)} · {network} · service={service}",
                      "[시작 시점 실측] " if args.preview else "")
                 if args.preview:
                     show(f"모터 상태 · {motors}", "[시작 시점 실측] ")
@@ -352,7 +369,7 @@ def main(argv=None):
                     return 0
             else:
                 client = DryClient()
-                show(f"오프라인 모의 제어 · 초기 FSM={client.fsm}")
+                show(f"오프라인 모의 제어 · 초기 FSM={display_fsm(client.fsm)}")
             controller = Controller(client, waist_3dof=args.waist_3dof)
             interact(controller, live=args.live)
     except EndSession:

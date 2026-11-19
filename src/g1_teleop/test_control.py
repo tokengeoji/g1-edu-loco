@@ -1,6 +1,7 @@
 # Author: Codex (IIC)
 """Tests exercise the same SDK methods that the terminal uses on G1."""
 import unittest
+from unittest.mock import Mock
 
 from .control import CONFIRM_SECONDS, PULSE_SECONDS, REPEAT_INTERVAL, Controller
 
@@ -130,6 +131,14 @@ class ControllerTest(unittest.TestCase):
         self.control.close()
         self.control.close()
         self.assertEqual(self.client.calls.count(ZERO), 1)
+
+    def test_final_stop_retries_zero_after_lost_reply_and_confirms_success(self):
+        self.control.handle("i")
+        stop = Mock(side_effect=[TimeoutError("lost reply"), 0])
+        self.client.SetVelocity = stop
+        self.assertIn("속도 0 요청 수락", self.control.close(force_stop=True))
+        self.assertEqual([entry.args for entry in stop.call_args_list], [ZERO[1:], ZERO[1:]])
+        self.assertIsNone(self.control.moving_key)
 
     def test_confirmation_is_distinct_one_shot_and_expires(self):
         self.control.handle("0")
