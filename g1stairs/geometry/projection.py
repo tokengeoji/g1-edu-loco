@@ -56,25 +56,26 @@ def _brown_conrady_rays(x_distorted, y_distorted, coefficients):
 def _sdk_rays(width, height, intrinsics, model, coefficients):
     try:
         import pyrealsense2 as rs
-    except ImportError as error:
+    except (ImportError, OSError) as error:
         raise ValueError(
-            "distortion %s requires the optional pyrealsense2 SDK for exact deprojection" % model
+            "cannot load the RealSense SDK (pyrealsense2) for depth deprojection: %s" % error
         ) from error
     sdk_intrinsics = rs.intrinsics()
     sdk_intrinsics.width, sdk_intrinsics.height = width, height
     sdk_intrinsics.fx, sdk_intrinsics.fy, sdk_intrinsics.ppx, sdk_intrinsics.ppy = intrinsics
     sdk_intrinsics.model = getattr(rs.distortion, model)
     sdk_intrinsics.coeffs = list(coefficients)
-    return np.array(
-        [
-            rs.rs2_deproject_pixel_to_point(sdk_intrinsics, [float(u), float(v)], 1.0)
-            for v in range(height)
-            for u in range(width)
-        ]
-    ).reshape(height, width, 3)
+    # Every depth frame in this recording shares these unit-depth rays.
+    rays = np.empty((height, width, 3), dtype=np.float32)
+    for v, row in enumerate(rays):
+        for u in range(width):
+            row[u] = rs.rs2_deproject_pixel_to_point(sdk_intrinsics, [u, v], 1.0)
+    if not np.all(np.isfinite(rays)):
+        raise ValueError("RealSense SDK returned non-finite rays for the recorded intrinsics")
+    return rays
 
 
-def camera_rays(intrinsics):
+def camera_rays(intrinsics, *, use_realsense_sdk=False):
     width, height = int(intrinsics["width"]), int(intrinsics["height"])
     fx, fy, cx, cy = (float(intrinsics[key]) for key in ("fx", "fy", "cx", "cy"))
     if width < 2 or height < 2 or fx <= 0 or fy <= 0 or not np.all(np.isfinite((fx, fy, cx, cy))):
@@ -83,12 +84,15 @@ def camera_rays(intrinsics):
     coefficients = np.asarray(intrinsics.get("coefficients", []), dtype=float)
     if coefficients.ndim != 1 or not np.all(np.isfinite(coefficients)):
         raise ValueError("invalid distortion coefficients")
-    if model != "none" and coefficients.shape != (5,):
-        raise ValueError("%s requires five distortion coefficients" % model)
-    if model in ("inverse_brown_conrady", "kannala_brandt4", "ftheta"):
-        return _sdk_rays(width, height, (fx, fy, cx, cy), model, coefficients)
-    if model not in ("none", "brown_conrady"):
+    sdk_only_models = ("inverse_brown_conrady", "kannala_brandt4", "ftheta")
+    if model not in ("none", "brown_conrady") + sdk_only_models:
         raise ValueError("unsupported depth distortion model: %s" % model)
+    if model == "none":
+        coefficients = np.zeros(5)
+    elif coefficients.shape != (5,):
+        raise ValueError("%s requires five distortion coefficients" % model)
+    if use_realsense_sdk or model in sdk_only_models:
+        return _sdk_rays(width, height, (fx, fy, cx, cy), model, coefficients)
     u, v = np.meshgrid(np.arange(width, dtype=float), np.arange(height, dtype=float))
     x, y = (u - cx) / fx, (v - cy) / fy
     if model == "brown_conrady":

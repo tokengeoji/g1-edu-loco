@@ -10,7 +10,10 @@ from pathlib import Path
 from g1stairs.session import create_part, dump_line, read_json, read_jsonl, run_path
 
 from .dashboard import Live, Recording, serve
-from .telemetry import PROFILE_EXCLUSIONS, TOPIC, Receiver, serialize, subscribe, synthetic_sample
+from .telemetry import TOPIC, Receiver, serialize, subscribe
+
+
+ROBOT_PROFILE = "g1-29"
 
 
 def positive(value):
@@ -31,20 +34,6 @@ def session_directory(args):
     return run_path(args.runs_dir, args.run) / "state"
 
 
-def fixture(args):
-    metadata = {
-        "source": "synthetic",
-        "clock_domain": "synthetic_ns",
-        "profile": args.profile,
-        "sample_count": args.samples,
-    }
-    with create_part(args.runs_dir, args.run, "state", metadata) as path:
-        with (path / "samples.jsonl").open("w", encoding="utf-8") as stream:
-            for index in range(args.samples):
-                dump_line(stream, synthetic_sample(index, args.profile))
-    print(session_directory(args))
-
-
 def wait_for_first(receiver, seconds):
     item = receiver.wait(seconds)
     if item is None:
@@ -58,15 +47,15 @@ def probe(args):
     receiver = Receiver(capacity=1)
     with subscribe(args.nic, args.domain, receiver):
         received_ns, message = wait_for_first(receiver, args.timeout_s)
-        sample = serialize(message, received_ns, args.profile)
-    print(json.dumps({"topic": TOPIC, "profile": args.profile, "sample": sample}, allow_nan=False))
+        sample = serialize(message, received_ns)
+    print(json.dumps({"topic": TOPIC, "profile": ROBOT_PROFILE, "sample": sample}, allow_nan=False))
 
 
 def record(args):
     metadata = {
         "source": "unitree",
         "clock_domain": "host_monotonic_ns",
-        "profile": args.profile,
+        "profile": ROBOT_PROFILE,
         "dds_topic": TOPIC,
         "dds_domain": args.domain,
         "duration_requested_s": args.seconds,
@@ -83,7 +72,7 @@ def record(args):
             with (path / "samples.jsonl").open("w", encoding="utf-8") as stream:
                 while sample is not None and sample[0] < end_ns:
                     received_ns, message = sample
-                    dump_line(stream, serialize(message, received_ns, args.profile))
+                    dump_line(stream, serialize(message, received_ns))
                     count += 1
                     max_gap_ns = max(max_gap_ns, received_ns - last_ns)
                     last_ns = received_ns
@@ -128,7 +117,7 @@ def dashboard(args):
 
     receiver = Receiver(capacity=0)
     with subscribe(args.nic, args.domain, receiver):
-        serve(Live(receiver, args.profile, args.stale_after_s), args.bind, args.port)
+        serve(Live(receiver, args.stale_after_s), args.bind, args.port)
 
 
 def parser():
@@ -136,7 +125,7 @@ def parser():
     action = config.add_subparsers(dest="action", required=True)
 
     for name, command in (
-        ("fixture", fixture), ("probe", probe), ("record", record),
+        ("probe", probe), ("record", record),
         ("inspect", inspect), ("serve", dashboard),
     ):
         sub = action.add_parser(name)
@@ -145,14 +134,10 @@ def parser():
         if name != "probe":
             sub.add_argument("--run", required=name != "serve")
         if name in ("probe", "record", "serve"):
-            sub.add_argument("--nic", help="the interface used by the robot's DDS connection")
-            sub.add_argument("--domain", type=int)
-            sub.add_argument("--profile", choices=PROFILE_EXCLUSIONS)
+            sub.add_argument("--nic", help="DDS network interface (default: Unitree SDK selection)")
+            sub.add_argument("--domain", type=int, help="DDS domain ID (default: Unitree SDK domain 0)")
         if name in ("probe", "record"):
             sub.add_argument("--timeout-s", type=positive, default=5.0)
-        if name == "fixture":
-            sub.add_argument("--profile", choices=PROFILE_EXCLUSIONS, default="g1-29")
-            sub.add_argument("--samples", type=positive_int, default=16)
         if name == "record":
             sub.add_argument("--seconds", type=positive, default=10.0)
         if name == "serve":
@@ -165,12 +150,14 @@ def parser():
 def main():
     config = parser()
     args = config.parse_args()
-    if args.action in ("probe", "record") or (args.action == "serve" and args.run is None):
-        if not args.nic or args.domain is None or args.domain < 0 or not args.profile:
-            config.error("live monitoring requires --nic, --domain and --profile")
     if args.action == "serve" and args.run is not None:
-        if any(v is not None for v in (args.nic, args.domain, args.profile)):
-            config.error("select a saved --run or the live --nic/--domain/--profile options")
+        if args.nic is not None or args.domain is not None:
+            config.error("--nic and --domain only apply to live monitoring")
+    elif args.action in ("probe", "record", "serve"):
+        if args.domain is None:
+            args.domain = 0
+        if args.domain < 0:
+            config.error("--domain must be nonnegative")
     try:
         args.command(args)
     except KeyboardInterrupt:

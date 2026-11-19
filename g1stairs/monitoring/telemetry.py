@@ -23,20 +23,11 @@ PARALLEL_JOINT_NAMES = {
     10: "right_ankle_b", 11: "right_ankle_a",
     13: "waist_a", 14: "waist_b",
 }
-PROFILE_EXCLUSIONS = {
-    "g1-29": (),
-    "g1-29-waist-locked": (13, 14),
-    "g1-23": (13, 14, 20, 21, 27, 28),
-}
 
 
 def number(value):
     """Preserve missing and non-finite SDK values as JSON null."""
     return None if value is None or not math.isfinite(value) else value
-
-
-def active_indices(profile):
-    return [i for i in range(len(JOINT_NAMES)) if i not in PROFILE_EXCLUSIONS[profile]]
 
 
 def joint_name(index, mode_pr):
@@ -47,14 +38,13 @@ def joint_name(index, mode_pr):
     return JOINT_NAMES[index]
 
 
-def serialize(message, received_ns, profile):
+def serialize(message, received_ns):
     mode_pr = message.mode_pr
     imu = message.imu_state
-    indices = active_indices(profile)
-    if len(message.motor_state) <= indices[-1]:
-        raise ValueError("LowState motor_state is too short for {}".format(profile))
+    if len(message.motor_state) < len(JOINT_NAMES):
+        raise ValueError("G1 EDU monitoring requires all 29 body motor slots in LowState")
     joints = []
-    for index in indices:
+    for index in range(len(JOINT_NAMES)):
         motor = message.motor_state[index]
         temperatures = list(motor.temperature)
         joints.append({
@@ -118,10 +108,9 @@ def subscribe(nic, domain, receiver):
     try:
         from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
         from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
-    except ImportError as exc:
+    except (ImportError, OSError) as exc:
         raise RuntimeError(
-            "Unitree SDK2 Python or its CycloneDDS binding is unavailable. "
-            "See monitoring/README.md and use fixture for offline checks."
+            "Cannot load Unitree SDK2 Python and CycloneDDS inside this container: {}".format(exc)
         ) from exc
 
     try:
@@ -129,41 +118,11 @@ def subscribe(nic, domain, receiver):
         subscriber = ChannelSubscriber(TOPIC, LowState_)
         subscriber.Init(receiver.on_sample, 0)
     except Exception as exc:
-        raise RuntimeError("Cannot initialize read-only DDS on {} domain {}: {}".format(
-            nic, domain, exc
+        raise RuntimeError("Cannot initialize read-only DDS on {} in domain {}: {}".format(
+            nic or "the SDK default interface", domain, exc
         )) from exc
 
     try:
         yield
     finally:
         subscriber.Close()
-
-
-def synthetic_sample(index, profile):
-    phase = index / 10.0
-    return {
-        "host_rx_monotonic_ns": index * 100_000_000,
-        "tick": None,
-        "mode_machine": None,
-        "mode_pr": 0,
-        "imu": {
-            "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
-            "gyroscope": [0.0, 0.0, 0.0],
-            "accelerometer": [0.0, 0.0, 9.81],
-            "rpy": [0.0, 0.0, 0.0],
-            "temperature_c": 30,
-        },
-        "joints": [
-            {
-                "index": joint,
-                "name": JOINT_NAMES[joint],
-                "q_rad": round(0.1 * math.sin(phase + joint), 6),
-                "dq_rad_s": round(0.1 * math.cos(phase + joint), 6),
-                "tau_est_nm": 0.0,
-                "temperature_casing_c": 31 + joint % 4,
-                "temperature_winding_c": 38 + joint % 6,
-                "motorstate": None,
-            }
-            for joint in active_indices(profile)
-        ],
-    }

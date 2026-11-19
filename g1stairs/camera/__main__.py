@@ -1,4 +1,4 @@
-"""CLI for native uint16 depth capture, fixtures and replay."""
+"""CLI for native uint16 depth capture and replay."""
 
 import argparse
 import json
@@ -10,8 +10,7 @@ import numpy as np
 
 from g1stairs.session import create_part, dump_line, read_json, read_jsonl, run_path, write_json
 
-from . import realsense
-from .synthetic import stairs_fixture
+from . import realsense, ros_depth
 
 
 def _metadata(source, clock):
@@ -31,30 +30,10 @@ def _point_to_frame(path, handle, index, image, sample):
     dump_line(handle, dict(sample, file=relative_file))
 
 
-def _fixture(args):
-    image, intrinsics, scale, calibration, truth = stairs_fixture()
-    metadata = _metadata("synthetic", "synthetic_monotonic_ns")
-    metadata.update(intrinsics=intrinsics, depth_scale_m=scale, fps=args.fps, frame_count=args.frames)
-    with create_part(args.runs_dir, args.run, "depth", metadata) as path:
-        (path / "frames").mkdir()
-        write_json(path / "calibration.json", calibration)
-        write_json(path / "truth.json", truth)
-        with (path / "frames.jsonl").open("w", encoding="utf-8") as handle:
-            for index in range(args.frames):
-                timestamp_ns = 1_000_000_000 + round(index * 1_000_000_000 / args.fps)
-                _point_to_frame(path, handle, index, image, {
-                    "frame_number": index,
-                    "host_rx_monotonic_ns": timestamp_ns,
-                    "device_timestamp_ms": timestamp_ns / 1_000_000,
-                    "device_timestamp_domain": "synthetic",
-                })
-    return {"source": "synthetic", "part": str(run_path(args.runs_dir, args.run) / "depth"),
-            "frame_count": args.frames}
-
-
 def _record(args):
     calibration = read_json(args.calibration) if args.calibration else None
-    metadata = _metadata("realsense", "host_monotonic_ns")
+    ros_stream = args.command == "record-ros"
+    metadata = _metadata("realsense_ros2" if ros_stream else "realsense", "host_monotonic_ns")
     with create_part(args.runs_dir, args.run, "depth", metadata) as path:
         if calibration is not None:
             write_json(path / "calibration.json", calibration)
@@ -66,8 +45,11 @@ def _record(args):
                 _point_to_frame(path, handle, index, image, sample)
                 index += 1
 
-            realsense.record(args.seconds, args.width, args.height, args.fps, args.device_index,
-                             write_frame, metadata)
+            if ros_stream:
+                ros_depth.record(args, write_frame, metadata)
+            else:
+                realsense.record(args.seconds, args.width, args.height, args.fps, args.device_index,
+                                 write_frame, metadata)
         metadata["frame_count"] = index
     return _replay(args)
 
@@ -120,6 +102,7 @@ def _replay(args):
         count += 1
     if not count or count != metadata["frame_count"]:
         raise ValueError("recording frame count is empty or inconsistent with its manifest")
+    device_sequence = metadata.get("frame_number_source") != "recorder_sequence"
     elapsed = (previous_host_ns - first_host_ns) / 1e9
     return {
         "part": str(path),
@@ -133,12 +116,12 @@ def _replay(args):
         "depth_scale_m": scale,
         "elapsed_s": elapsed,
         "observed_fps": (count - 1) / elapsed if elapsed > 0 else None,
-        "frame_number_gap_total": skipped,
-        "nonincreasing_frame_numbers": discontinuities,
+        "frame_number_gap_total": skipped if device_sequence else None,
+        "nonincreasing_frame_numbers": discontinuities if device_sequence else None,
         "invalid_depth_fraction": invalid / pixels,
         "min_depth_m": None if minimum is None else minimum * scale,
         "max_depth_m": None if maximum is None else maximum * scale,
-        "empty_polls": metadata.get("empty_polls", 0),
+        "empty_polls": metadata.get("empty_polls", 0) if device_sequence else None,
         "calibration_available": (path / "calibration.json").is_file(),
     }
 
@@ -162,16 +145,14 @@ def _positive(raw):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    fixture = commands.add_parser("fixture", help="write a synthetic staircase run")
     probe = commands.add_parser("probe", help="check for the G1's D435i and list its Z16 profiles")
     record = commands.add_parser("record", help="record D435i depth; G1 guide default: 640x480 at 60 Hz Z16")
+    ros_record = commands.add_parser("record-ros", help="subscribe to existing D435i Depth and CameraInfo")
     replay = commands.add_parser("replay", help="validate and summarize every stored frame")
-    for command in (fixture, probe, record, replay):
+    for command in (probe, record, ros_record, replay):
         command.add_argument("--runs-dir", type=Path, default=Path("runs"))
         if command is not probe:
             command.add_argument("--run", required=True)
-    fixture.add_argument("--frames", type=_int_at_least(1), default=8)
-    fixture.add_argument("--fps", type=_int_at_least(1), default=30)
     for command in (probe, record):
         command.add_argument("--source", choices=("realsense",), default="realsense")
     record.add_argument("--device-index", type=_int_at_least(0))
@@ -179,11 +160,18 @@ def main(argv=None):
     record.add_argument("--width", type=_int_at_least(1), default=width)
     record.add_argument("--height", type=_int_at_least(1), default=height)
     record.add_argument("--fps", type=_int_at_least(1), default=fps)
-    record.add_argument("--seconds", type=_positive, default=10.0)
-    record.add_argument("--calibration", type=Path)
+    for command in (record, ros_record):
+        command.add_argument("--seconds", type=_positive, default=10.0)
+        command.add_argument("--calibration", type=Path)
+    ros_record.add_argument("--depth-topic", required=True)
+    ros_record.add_argument("--info-topic", required=True)
+    ros_record.add_argument("--depth-scale-m", type=_positive, required=True,
+                            help="verified metres per stored pixel unit of this publisher")
+    ros_record.add_argument("--timeout-s", type=_positive, default=5.0,
+                            help="seconds to wait for the first exact Image/CameraInfo pair")
     probe.set_defaults(action=lambda _: realsense.probe())
-    fixture.set_defaults(action=_fixture)
     record.set_defaults(action=_record)
+    ros_record.set_defaults(action=_record)
     replay.set_defaults(action=_replay)
     args = parser.parse_args(argv)
     try:

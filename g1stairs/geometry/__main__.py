@@ -48,7 +48,10 @@ def _measure(args):
     if "frame_id" not in calibration_json and "target_frame" in calibration_json:
         calibration_json["frame_id"] = calibration_json["target_frame"]
     calibration = Calibration.from_mapping(calibration_json)
-    rays = camera_rays(depth_manifest["intrinsics"])
+    rays = camera_rays(
+        depth_manifest["intrinsics"],
+        use_realsense_sdk=depth_manifest["source"] in ("realsense", "realsense_ros2"),
+    )
     scale = float(depth_manifest["depth_scale_m"])
     options = MeasurementOptions(args.grid_m, args.height_tolerance_m, args.min_samples)
     metadata = {

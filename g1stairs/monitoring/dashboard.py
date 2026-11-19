@@ -43,9 +43,8 @@ class Recording:
 
 
 class Live:
-    def __init__(self, receiver, profile, stale_after):
+    def __init__(self, receiver, stale_after):
         self.receiver = receiver
-        self.profile = profile
         self.stale_after = stale_after
 
     def sample(self, index):
@@ -58,7 +57,7 @@ class Live:
             "source": "unitree",
             "status": "stale" if age > self.stale_after else "live",
             "age_s": age,
-            "sample": serialize(message, received_ns, self.profile),
+            "sample": serialize(message, received_ns),
         }
 
 
