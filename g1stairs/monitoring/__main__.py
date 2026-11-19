@@ -1,0 +1,185 @@
+"""CLI for passive G1 monitoring."""
+
+import argparse
+import json
+import math
+import sys
+import time
+from pathlib import Path
+
+from g1stairs.session import create_part, dump_line, read_json, read_jsonl, run_path
+
+from .dashboard import Live, Recording, serve
+from .telemetry import PROFILE_EXCLUSIONS, TOPIC, Receiver, serialize, subscribe, synthetic_sample
+
+
+def positive(value):
+    value = float(value)
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError("expected a finite positive number")
+    return value
+
+
+def positive_int(value):
+    value = int(value)
+    if value < 1:
+        raise argparse.ArgumentTypeError("expected a positive integer")
+    return value
+
+
+def session_directory(args):
+    return run_path(args.runs_dir, args.run) / "state"
+
+
+def fixture(args):
+    metadata = {
+        "source": "synthetic",
+        "clock_domain": "synthetic_ns",
+        "profile": args.profile,
+        "sample_count": args.samples,
+    }
+    with create_part(args.runs_dir, args.run, "state", metadata) as path:
+        with (path / "samples.jsonl").open("w", encoding="utf-8") as stream:
+            for index in range(args.samples):
+                dump_line(stream, synthetic_sample(index, args.profile))
+    print(session_directory(args))
+
+
+def wait_for_first(receiver, seconds):
+    item = receiver.wait(seconds)
+    if item is None:
+        raise RuntimeError("No {} samples in {} s. Check the chosen NIC and DDS domain.".format(
+            TOPIC, seconds
+        ))
+    return item
+
+
+def probe(args):
+    receiver = Receiver(capacity=1)
+    with subscribe(args.nic, args.domain, receiver):
+        received_ns, message = wait_for_first(receiver, args.timeout_s)
+        sample = serialize(message, received_ns, args.profile)
+    print(json.dumps({"topic": TOPIC, "profile": args.profile, "sample": sample}, allow_nan=False))
+
+
+def record(args):
+    metadata = {
+        "source": "unitree",
+        "clock_domain": "host_monotonic_ns",
+        "profile": args.profile,
+        "dds_topic": TOPIC,
+        "dds_domain": args.domain,
+        "duration_requested_s": args.seconds,
+    }
+    receiver = Receiver()
+    with create_part(args.runs_dir, args.run, "state", metadata) as path:
+        with subscribe(args.nic, args.domain, receiver):
+            sample = wait_for_first(receiver, args.timeout_s)
+            first_ns = sample[0]
+            end_ns = first_ns + max(1, int(args.seconds * 1_000_000_000))
+            count = 0
+            last_ns = first_ns
+            max_gap_ns = 0
+            with (path / "samples.jsonl").open("w", encoding="utf-8") as stream:
+                while sample is not None and sample[0] < end_ns:
+                    received_ns, message = sample
+                    dump_line(stream, serialize(message, received_ns, args.profile))
+                    count += 1
+                    max_gap_ns = max(max_gap_ns, received_ns - last_ns)
+                    last_ns = received_ns
+                    remaining = (end_ns - time.monotonic_ns()) / 1_000_000_000
+                    sample = receiver.wait(max(0, remaining))
+        _, dropped = receiver.snapshot()
+        metadata.update({
+            "sample_count": count,
+            "first_host_rx_monotonic_ns": first_ns,
+            "last_host_rx_monotonic_ns": last_ns,
+            "max_internal_sample_gap_ns": max_gap_ns,
+            "end_without_sample_ns": end_ns - last_ns,
+            "dropped_in_application_queue": dropped,
+            "measured_recorded_sample_hz": (count - 1) * 1e9 / (last_ns - first_ns)
+            if last_ns > first_ns else None,
+        })
+    print(session_directory(args))
+
+
+def inspect(args):
+    path = session_directory(args)
+    metadata = read_json(path / "manifest.json")
+    first = last = None
+    count = 0
+    for sample in read_jsonl(path / "samples.jsonl"):
+        if first is None:
+            first = sample
+        last = sample
+        count += 1
+    print(json.dumps({
+        "source": metadata["source"],
+        "metadata": metadata,
+        "parsed_sample_count": count,
+        "first_sample": first,
+        "last_sample": last,
+    }, indent=2, allow_nan=False))
+
+
+def dashboard(args):
+    if args.run is not None:
+        return serve(Recording(session_directory(args)), args.bind, args.port)
+
+    receiver = Receiver(capacity=0)
+    with subscribe(args.nic, args.domain, receiver):
+        serve(Live(receiver, args.profile, args.stale_after_s), args.bind, args.port)
+
+
+def parser():
+    config = argparse.ArgumentParser(description=__doc__)
+    action = config.add_subparsers(dest="action", required=True)
+
+    for name, command in (
+        ("fixture", fixture), ("probe", probe), ("record", record),
+        ("inspect", inspect), ("serve", dashboard),
+    ):
+        sub = action.add_parser(name)
+        sub.set_defaults(command=command)
+        sub.add_argument("--runs-dir", type=Path, default=Path("runs"))
+        if name != "probe":
+            sub.add_argument("--run", required=name != "serve")
+        if name in ("probe", "record", "serve"):
+            sub.add_argument("--nic", help="the interface used by the robot's DDS connection")
+            sub.add_argument("--domain", type=int)
+            sub.add_argument("--profile", choices=PROFILE_EXCLUSIONS)
+        if name in ("probe", "record"):
+            sub.add_argument("--timeout-s", type=positive, default=5.0)
+        if name == "fixture":
+            sub.add_argument("--profile", choices=PROFILE_EXCLUSIONS, default="g1-29")
+            sub.add_argument("--samples", type=positive_int, default=16)
+        if name == "record":
+            sub.add_argument("--seconds", type=positive, default=10.0)
+        if name == "serve":
+            sub.add_argument("--bind", default="127.0.0.1")
+            sub.add_argument("--port", type=positive_int, default=8765)
+            sub.add_argument("--stale-after-s", type=positive, default=1.0)
+    return config
+
+
+def main():
+    config = parser()
+    args = config.parse_args()
+    if args.action in ("probe", "record") or (args.action == "serve" and args.run is None):
+        if not args.nic or args.domain is None or args.domain < 0 or not args.profile:
+            config.error("live monitoring requires --nic, --domain and --profile")
+    if args.action == "serve" and args.run is not None:
+        if any(v is not None for v in (args.nic, args.domain, args.profile)):
+            config.error("select a saved --run or the live --nic/--domain/--profile options")
+    try:
+        args.command(args)
+    except KeyboardInterrupt:
+        return 130
+    except (OSError, RuntimeError, ValueError) as exc:
+        print("monitoring: {}".format(exc), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

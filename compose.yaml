@@ -1,0 +1,38 @@
+name: g1-edu-loco
+
+x-local-service: &local-service
+  image: jsj-g1-edu-loco:local
+  build: .
+  init: true
+  user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  volumes:
+    - type: bind
+      source: ./runs
+      target: /runs
+      bind:
+        create_host_path: false
+
+services:
+  monitoring:
+    <<: *local-service
+    container_name: jsj-loco-monitoring
+    command: ["python", "-m", "g1stairs.monitoring", "serve", "--runs-dir", "/runs", "--run", "${G1_DEMO_RUN:-demo}", "--bind", "0.0.0.0", "--port", "8765"]
+    ports:
+      - "127.0.0.1:${MONITOR_PORT:-8765}:8765"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  camera:
+    <<: *local-service
+    container_name: jsj-loco-camera
+    command: ["sleep", "infinity"]
+
+  geometry:
+    <<: *local-service
+    container_name: jsj-loco-geometry
+    command: ["sleep", "infinity"]

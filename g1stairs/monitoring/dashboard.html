@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>G1 EDU 상태 모니터링</title>
+<style>
+  :root{color-scheme:dark;--bg:#11181b;--panel:#1b272c;--line:#314149;--text:#f0f5f5;--muted:#a9bec3;--accent:#87e0cd}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 system-ui,sans-serif}
+  main{max-width:1120px;padding:clamp(20px,5vw,52px);margin:auto}
+  header{display:flex;gap:20px;justify-content:space-between;align-items:center;flex-wrap:wrap;margin-bottom:24px}
+  h1{font-size:clamp(24px,5vw,39px);line-height:1.2;margin:0}
+  #status{margin:0;color:var(--accent)}
+  #status[data-warning="true"]{color:#ffd08e}
+  section{border:1px solid var(--line);background:var(--panel);border-radius:12px;margin:0 0 18px;overflow:auto}
+  #navigation{padding:16px 20px;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:16px}
+  #navigation[hidden]{display:none}
+  input{min-width:0;width:100%;accent-color:var(--accent)}
+  dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:14px;margin:0;padding:16px 20px}
+  dt{color:var(--muted);font-size:13px}
+  dd{margin:3px 0 0;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+  table{border-collapse:collapse;width:100%;min-width:680px;font-variant-numeric:tabular-nums}
+  th,td{padding:9px 14px;text-align:right;border-bottom:1px solid var(--line)}
+  td:nth-child(2),th:nth-child(2){text-align:left}
+  th{font-size:13px;color:var(--muted)}
+  tr:last-child td{border:0}
+  @media(max-width:500px){#navigation{grid-template-columns:1fr auto}#navigation label{grid-column:1 / -1}}
+</style>
+</head>
+<body>
+<main>
+  <header><h1>G1 EDU 상태 모니터링</h1><p id="status" role="status" aria-live="polite">연결 중</p></header>
+  <section id="navigation" aria-label="기록 탐색" hidden>
+    <label for="sample-index">기록 샘플</label><input id="sample-index" type="range" min="0" value="0"><output id="sample-number" for="sample-index"></output>
+  </section>
+  <section aria-label="IMU와 수신 상태">
+    <dl>
+      <div><dt>관절 수</dt><dd id="joint-count">—</dd></div>
+      <div><dt>IMU Roll / Pitch / Yaw</dt><dd id="rpy">—</dd></div>
+      <div><dt>IMU 온도</dt><dd id="imu-temp">—</dd></div>
+      <div><dt>DDS tick</dt><dd id="tick">—</dd></div>
+      <div><dt>모터 각도 모드</dt><dd id="pr">—</dd></div>
+    </dl>
+  </section>
+  <section aria-label="관절별 값">
+    <table>
+      <thead><tr><th scope="col">ID</th><th scope="col">관절</th><th scope="col">각도 (rad)</th><th scope="col">각속도 (rad/s)</th><th scope="col">추정 토크 (N·m)</th><th scope="col">케이싱 (°C)</th><th scope="col">권선 (°C)</th></tr></thead>
+      <tbody id="joints"></tbody>
+    </table>
+  </section>
+</main>
+<script>
+const byId = id => document.getElementById(id);
+const slider = byId('sample-index');
+let requestId = 0;
+let replay = false;
+const value = (n, digits) => Number.isFinite(n) ? n.toFixed(digits) : '—';
+
+function showStatus(text, warning) {
+  const status = byId('status');
+  if (status.textContent !== text) status.textContent = text;
+  status.dataset.warning = String(warning);
+}
+
+function paint(data) {
+  const message = {
+    waiting: 'DDS 데이터 대기',
+    stale: 'DDS 수신 지연 · 마지막 샘플',
+    live: 'DDS 실시간',
+    recorded: data.source === 'synthetic' ? '합성 샘플 재생' : 'DDS 기록 재생',
+  }[data.status];
+  showStatus(message, data.status === 'stale' || data.status === 'waiting');
+  replay = data.status === 'recorded';
+  byId('navigation').hidden = !replay;
+  if (replay) {
+    slider.max = data.sample_count - 1;
+    byId('sample-number').textContent = (data.sample_index + 1) + ' / ' + data.sample_count;
+  }
+  const s = data.sample;
+  if (!s) return;
+  byId('joint-count').textContent = s.joints.length;
+  byId('rpy').textContent = s.imu.rpy.map(n => value(n, 3)).join(' / ');
+  byId('imu-temp').textContent = s.imu.temperature_c == null ? '—' : s.imu.temperature_c + ' °C';
+  byId('tick').textContent = s.tick == null ? '—' : s.tick;
+  byId('pr').textContent = s.mode_pr === 0 ? 'PR' : s.mode_pr === 1 ? 'AB' : '—';
+  const rows = document.createDocumentFragment();
+  for (const joint of s.joints) {
+    const row = document.createElement('tr');
+    const fields = [joint.index, joint.name, value(joint.q_rad, 3), value(joint.dq_rad_s, 3),
+      value(joint.tau_est_nm, 3), value(joint.temperature_casing_c, 0), value(joint.temperature_winding_c, 0)];
+    for (const field of fields) {
+      const cell = document.createElement('td');
+      cell.textContent = field;
+      row.append(cell);
+    }
+    rows.append(row);
+  }
+  byId('joints').replaceChildren(rows);
+}
+
+async function update() {
+  const id = ++requestId;
+  try {
+    const response = await fetch('/api/sample?index=' + slider.value, {cache: 'no-store'});
+    const data = await response.json();
+    if (id !== requestId) return;
+    if (!response.ok) throw new Error(data.error);
+    paint(data);
+  } catch (error) {
+    if (id === requestId) showStatus('데이터 읽기 오류 · ' + error.message, true);
+  }
+}
+
+slider.addEventListener('input', update);
+async function refresh() {
+  await update();
+  if (!replay) setTimeout(refresh, 400);
+}
+refresh();
+</script>
+</body>
+</html>
