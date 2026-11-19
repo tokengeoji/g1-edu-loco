@@ -107,7 +107,7 @@ def _measure(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="g1 stairs", description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     measure = subparsers.add_parser("measure", help="write measured horizontal surfaces from saved frames")
     measure.add_argument("--runs-dir", type=Path, default=Path("runs"))

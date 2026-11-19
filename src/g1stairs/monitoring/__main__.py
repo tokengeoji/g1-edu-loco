@@ -121,7 +121,7 @@ def dashboard(args):
 
 
 def parser():
-    config = argparse.ArgumentParser(description=__doc__)
+    config = argparse.ArgumentParser(prog="g1 monitor", description=__doc__)
     action = config.add_subparsers(dest="action", required=True)
 
     for name, command in (

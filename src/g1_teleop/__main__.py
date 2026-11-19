@@ -284,7 +284,7 @@ def interact(controller):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="G1 고수준 보행 키보드 제어")
+    parser = argparse.ArgumentParser(prog="g1 teleop", description="G1 고수준 보행 키보드 제어")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--live", action="store_true", help="실제 G1 키보드 제어")
     mode.add_argument("--dry-run", action="store_true", help="오프라인 모의 제어 (기본값)")

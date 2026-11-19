@@ -107,7 +107,8 @@ def _select_device(rs, context, config, device_index):
         if not matches:
             raise CameraError(f"DEVICE_MODEL_MISMATCH: expected {G1_HEAD_MODEL}; detected {models}")
         if len(matches) > 1:
-            raise CameraError("DEVICE_AMBIGUOUS: multiple D435i cameras; run probe and pass --device-index")
+            raise CameraError("DEVICE_AMBIGUOUS: multiple D435i cameras. Run g1 camera probe-usb "
+                              "in the container and pass --device-index")
         device_index = matches[0]
     elif not 0 <= device_index < len(devices):
         raise CameraError("DEVICE_NOT_VISIBLE: selected device index is unavailable")
@@ -135,7 +136,8 @@ def record(seconds, width, height, fps, device_index, write_frame, metadata):
         if requested_profile not in _depth_profiles(rs, device):
             raise CameraError(
                 f"DEPTH_PROFILE_UNSUPPORTED: {model} does not report {width}x{height} at {fps} Hz Z16; "
-                "run probe and choose a listed profile with --width, --height and --fps"
+                "run g1 camera probe-usb in the container and choose a listed profile "
+                "with --width, --height and --fps"
             )
         pipeline = rs.pipeline(context)
         config.enable_stream(rs.stream.depth, width, height, rs.format.z16, fps)

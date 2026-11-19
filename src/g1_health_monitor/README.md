@@ -5,29 +5,37 @@
 
 ---
 
-## 1. 빌드
+## 1. G1 호스트에서 컨테이너 접속
+
+실행 파일은 통합 이미지 빌드 때 설치된다. 첫 설치는 [G1에서 베이스·통합 이미지 빌드와 컨테이너 생성](../../README.md#pc2)을 따른다. 생성한 `jsj-g1-tools`가 실행 중이면 아래 명령으로 들어간다.
+
+**G1 호스트**
 
 ```bash
-cd ~/ws/g1-edu-tools/g1_health_monitor
-mkdir -p build && cd build
-cmake .. -DCMAKE_PREFIX_PATH=/opt/unitree_robotics
-make
+docker exec -it jsj-g1-tools bash
 ```
 
-`build/g1_health_monitor` 실행 파일이 생기면 성공.
+## 2. 컨테이너 내부에서 온도 측정
 
-## 2. 실행
+먼저 로봇용 유선 인터페이스 이름을 확인한다. 아래 `eth0`는 현장에서 수신을 확인한 예시다. 모니터는 `Ctrl+C`로 종료한다.
+
+**컨테이너 내부**
 
 ```bash
-ip a                                   # 로봇과 연결된 인터페이스 이름 확인 (192.168.123.x)
-./g1_health_monitor eth0               # 기본 기준: 경고 70, 위험 80, 저온 경고 10, 저온 위험 5
-./g1_health_monitor eth0 65 80         # 경고 65도, 위험 80도로 바꿔 실행
-./g1_health_monitor eth0 70 80 10 5    # 저온 기준까지 전부 지정
+g1 interfaces
+g1 health eth0
 ```
+
+**컨테이너 내부 · 모터 경보 기준을 바꾸는 경우**. 다음 예시는 경고·위험을 65·80°C, 저온 경고·위험을 10·5°C로 지정한다.
+
+```bash
+g1 health eth0 65 80 10 5
+```
+
+온도 측정에는 Unitree SDK2 기반의 [연구실 원본 C++ 코드](https://github.com/duckptr/g1-edu-tools/tree/0f761000a0b78d9437f9d7166f41725a5924e441/g1_health_monitor)를 사용한다.
 
 - 인자 순서: `warn danger cold_warn cold_danger`
 - 반드시 `cold_danger < cold_warn < warn < danger` 순서여야 한다. 아니면 사용법을 출력하고 종료한다.
-- 종료는 `Ctrl+C`.
 
 로봇이 연결되지 않았을 때 화면:
 
@@ -120,7 +128,6 @@ return "ok";
 - [ ] **단위**: 배터리 전류·전압·온도는 raw 값 그대로 출력한다. 앱에 보이는 값과 비교해 단위를 확인한다.
 - [ ] **모터 온도 2개**: `temp0`, `temp1`이 각각 어느 부위인지 모름. 한쪽이 항상 0이면 COLD-DANGER가 계속 뜨므로, 그때는 쓰는 쪽만 보도록 고친다. 배터리 온도 배열도 같은 문제가 있을 수 있다.
 - [ ] **저온 기준값**: 5/10도는 임시값. 실제로 넘어진 온도를 알게 되면 맞춘다.
-- [ ] 도커 컨테이너(GCC 9) 안에서 빌드
 
 ## 6. 나중에 추가할 것
 

@@ -14,7 +14,7 @@ port=$((10#$port))
 self_test=false
 if [[ ${1:-} == --self-test ]]; then self_test=true; shift; fi
 if [[ $self_test == false && ! -t 1 ]]; then
-  echo 'Run g1 camera rviz interactively so the session password goes only to your terminal.' >&2
+  echo '실행 중인 컨테이너의 대화형 셸에서 g1 camera rviz를 실행하세요. PC2 호스트에서는 docker exec -it jsj-g1-tools g1 camera rviz를 사용하세요.' >&2
   exit 2
 fi
 state=$(mktemp -d)
@@ -84,6 +84,6 @@ PY
   exit 0
 fi
 
-printf '\nPC2 RViz2: http://127.0.0.1:%s/vnc.html?autoconnect=true&resize=scale\n' "$port"
+printf '\nPC2 브라우저에서 열 RViz2 주소: http://127.0.0.1:%s/vnc.html?autoconnect=true&resize=scale\n' "$port"
 printf '이번 세션의 VNC 암호: %s\n종료: Ctrl+C\n' "$(<"$state/password")"
 wait -n

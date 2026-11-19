@@ -20,7 +20,7 @@ def decoder_transport(image_format):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="g1 camera compressed-view", description=__doc__)
     parser.add_argument("topic", help="Absolute ROS 2 sensor_msgs/msg/CompressedImage topic")
     args = parser.parse_args(argv)
     if not args.topic.startswith("/") or args.topic == VIEW_TOPIC:

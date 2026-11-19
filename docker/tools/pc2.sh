@@ -34,6 +34,7 @@ print_create_command() {
     echo 'PC2에서 USB D435i(8086:0b3a)를 찾지 못했습니다. 네트워크 전용 명령을 출력합니다.' >&2
   fi
   # A name collision must stop the command before it can start another container.
+  printf '%s\n' '아래 Docker 명령을 G1 PC2 호스트에서 실행하세요.' >&2
   printf '%q ' docker create --name jsj-g1-tools --pull never --init --runtime=runc --network host \
     --cap-drop ALL --security-opt no-new-privileges:true --log-driver none \
     "${devices[@]}" jsj-g1-tools:foxy

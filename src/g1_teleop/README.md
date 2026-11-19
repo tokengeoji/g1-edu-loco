@@ -5,24 +5,49 @@ PC2의 통합 컨테이너 `jsj-g1-tools`에서 Unitree 고수준 보행기를 �
 
 ## 실행
 
-다음은 현장에서 온도 수신을 확인한 `eth0`와 DDS 도메인 0 기준이다. NIC가 다른 경우 `g1 interfaces` 출력과 정상 작동한 모니터 설정을 대조해 이름을 바꾼다. G1 호스트에 입력하는 명령은 모두 Docker CLI다.
+`jsj-g1-tools`가 실행 중인 G1-EDU PC2에서 SSH 터미널 두 개를 사용한다. 첫 번째 터미널은 온도·배터리 모니터용, 두 번째 터미널은 키보드 조작용이다. 두 터미널 모두 같은 컨테이너에 접속한다.
+
+**G1 호스트 · 터미널 1**
 
 ```bash
-docker exec jsj-g1-tools g1 interfaces
-docker exec jsj-g1-tools g1 teleop --status --interface eth0 --domain 0
-docker exec -it jsj-g1-tools g1 teleop --dry-run
+docker exec -it jsj-g1-tools bash
 ```
 
-연습 세션은 FSM 802에서 시작한다. `w`로 전진 요청값, `Space`로 속도 0, `x`로 종료를 확인한다. 실기체의 `--status`는 실제 FSM과 응답한 서비스(`sport` 또는 `loco`)를 출력한다.
-
-첫 터미널에서 온도·배터리 모니터를 켠다. 두 번째 터미널에서 텔레옵을 실행한다. 첫 실기체 동작은 숙련자 입회하에 기체 지지, 물리 조종기, 모터·배터리 상태를 확인하고 진행한다. 같은 컨테이너에서는 실기체 텔레옵 한 세션만 열 수 있다.
+**컨테이너 내부 · 터미널 1**
 
 ```bash
-docker exec -it jsj-g1-tools g1 health eth0
+g1 interfaces
+g1 health eth0
 ```
 
+`eth0`는 예시다. 실제 G1 연결용 유선 NIC 이름으로 바꾸고, 모터 온도와 배터리 데이터가 새로 들어오는지 확인한다. 조작하는 동안 모니터를 켜 둔다.
+
+**G1 호스트 · 터미널 2**
+
 ```bash
-docker exec -it jsj-g1-tools g1 teleop --live --interface eth0 --domain 0
+docker exec -it jsj-g1-tools bash
+```
+
+**컨테이너 내부 · 터미널 2**
+
+```bash
+g1 teleop --dry-run
+```
+
+오프라인 연습은 FSM 802에서 시작한다. `w`로 전진 요청값, `Space`로 속도 0을 확인하고 `x`로 연습을 끝낸다. 같은 셸에서 모니터가 정상 수신한 NIC와 도메인 0으로 기체의 실제 FSM과 응답한 서비스(`sport` 또는 `loco`)를 조회한다.
+
+**컨테이너 내부 · 터미널 2**
+
+```bash
+g1 teleop --status --interface eth0 --domain 0
+```
+
+첫 실기체 동작은 숙련자 입회하에 기체 지지, 물리 조종기, 모터·배터리 상태를 확인하고 진행한다. FSM 802에서는 내장 보행기가 팔을 흔들 수 있다. 팔 고정이 필요한 실험은 아래 실기체 조작을 시작하기 전에 이 제약을 확인한다. 같은 컨테이너에서 실기체 텔레옵은 한 세션만 실행한다.
+
+**컨테이너 내부 · 터미널 2**
+
+```bash
+g1 teleop --live --interface eth0 --domain 0
 ```
 
 텔레옵에서 `f`로 현재 FSM을 읽는다. **이미 802면 첫 `w`가 전진 명령**이다. 다른 모드에서는 `2`를 누른 뒤 4초 이내에 `Enter`를 눌러 802를 요청한다. 실제 FSM이 802로 조회되어야 해당 모드에서 이동한다. 모드와 속도 상한은 조작자가 해당 키를 눌렀을 때만 변경한다.

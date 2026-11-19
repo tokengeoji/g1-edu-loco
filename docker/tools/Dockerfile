@@ -46,5 +46,8 @@ RUN set -e; chmod 0755 /usr/local/bin/g1 /usr/local/bin/g1-pc2-create-command; m
     g1 monitor --help >/dev/null; g1 teleop --help >/dev/null; \
     g1 camera --help >/dev/null; g1 stairs --help >/dev/null
 
+# Mark G1 operator shells so interactive commands are entered in the right place.
+RUN printf '%s\n' 'PS1="[jsj-g1-tools] \w\\$ "' >> /root/.bashrc
+
 WORKDIR /workspace
 CMD ["sleep", "infinity"]

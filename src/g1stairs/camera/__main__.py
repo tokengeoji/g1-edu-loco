@@ -143,7 +143,7 @@ def _positive(raw):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="g1 camera", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     probe = commands.add_parser("probe", help="check for the G1's D435i and list its Z16 profiles")
     record = commands.add_parser("record", help="record D435i depth; G1 guide default: 640x480 at 60 Hz Z16")
