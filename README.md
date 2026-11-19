@@ -4,7 +4,7 @@
 
 | 원하는 작업 | PC2에서 실행할 순서 |
 | --- | --- |
-| 전신 관절·모터 온도 GUI 열기 | [1. 베이스 빌드](#pc2) → [2. 모니터링](#monitoring) |
+| 외부 PC에서 전신 관절·모터 온도 보기 | [1. 베이스 빌드](#pc2) → [2. 모니터링](#monitoring) |
 | 헤드 D435i의 실제 깊이 영상 기록 | [1. 베이스 빌드](#pc2) → [3. 카메라](#camera) |
 | 촬영한 계단의 높이·디딤면 깊이·폭 측정 | [1. 베이스 빌드](#pc2) → [3. 카메라 기록](#camera) → [4. 계단 측정](#geometry) |
 
@@ -13,6 +13,8 @@
 ## 1. PC2에서 공통 베이스 이미지 만들기
 
 PC2의 **Bash 터미널**에서 아래 블록 전체를 한 번 붙여넣으세요. Docker가 이 저장소의 Dockerfile을 읽어 `jsj-g1-base:foxy`를 빌드합니다. SDK 설치와 Git 복제는 이미지 빌드 안에서 실행됩니다. PC2의 L4T가 R35.3.1이면 부모 이미지가 자동 선택됩니다. 다른 버전이면 안내에 따라 해당 PC2와 호환되는 Ubuntu 20.04·ROS 2 Foxy ARM64 부모 이미지 태그를 입력하세요.
+
+`jsj-g1-base:foxy`는 이 단계에서 PC2에 **만들어질 이미지 이름**입니다. `docker pull` 대상은 Dockerfile의 출발점이 되는 부모 이미지입니다.
 
 ```bash
 (
@@ -25,6 +27,11 @@ PC2의 **Bash 터미널**에서 아래 블록 전체를 한 번 붙여넣으세�
     [[ -n "$parent" ]] || exit 1
   fi
 
+  if [[ "$parent" == jsj-g1-base:foxy ]]; then
+    echo 'jsj-g1-base:foxy는 빌드 결과입니다. 현재 L4T에 맞는 부모 이미지 태그를 입력하세요.' >&2
+    exit 1
+  fi
+  echo "[1/2] 부모 이미지 준비: $parent"
   if ! docker image inspect "$parent" >/dev/null 2>&1; then
     docker pull --platform linux/arm64 "$parent"
   fi
@@ -33,7 +40,8 @@ PC2의 **Bash 터미널**에서 아래 블록 전체를 한 번 붙여넣으세�
     exit 1
   }
 
-  docker build --platform linux/arm64 --build-arg BASE_IMAGE="$parent" \
+  echo '[2/2] GitHub Dockerfile로 공통 이미지 빌드'
+  BUILDKIT_PROGRESS=plain docker build --platform linux/arm64 --build-arg BASE_IMAGE="$parent" \
     --tag jsj-g1-base:foxy \
     https://raw.githubusercontent.com/tokengeoji/g1-edu-loco/main/docker/base/Dockerfile
   docker image inspect --format 'jsj-g1-base:foxy  {{.Os}}/{{.Architecture}}  {{.Id}}' jsj-g1-base:foxy
@@ -41,6 +49,8 @@ PC2의 **Bash 터미널**에서 아래 블록 전체를 한 번 붙여넣으세�
 ```
 
 마지막 줄에 `jsj-g1-base:foxy  linux/arm64  sha256:…`가 출력되면 빌드가 끝난 것입니다. 관절 상태를 보려면 [2번](#monitoring), 계단을 촬영하려면 [3번](#camera)으로 이동하세요. 이 이미지는 세 컨테이너에서 공통으로 사용하므로 최초 설정 때 한 번만 빌드하면 됩니다. [Dockerfile](docker/base/Dockerfile) · [이미지 구성과 SDK 확인 명령](docker/base/README.md#sdk) · [Docker 공식 빌드 문서](https://docs.docker.com/build/concepts/context/#how-to-build-without-a-context)
+
+빌드가 `Unauthorized`로 멈추면 [오류를 낸 서버 확인](docker/base/README.md#unauthorized)을 보세요.
 
 <a id="monitoring"></a>
 
@@ -78,11 +88,22 @@ PC2의 **Bash 터미널**에서 아래 블록 전체를 한 번 붙여넣으세�
 )
 ```
 
-**② GUI 실행**. 이 명령이 실행되는 동안 화면이 갱신됩니다. 기본 수신 주소는 PC2의 `127.0.0.1:8765`입니다. 실제 `rt/lowstate`를 받으면 다리 12축·허리 3축·팔 14축과 IMU가 표시됩니다.
+**② PC2에서 모니터링 서버를 실행하고 외부 PC에서 GUI 열기**
+
+**PC2에서** 아래 블록을 실행합니다. 표시되는 주소 중 외부 PC에서 PC2에 접속할 때 쓰는 LAN 주소를 입력하세요. 이미 서버가 떠 있으면 그 터미널에서 `Ctrl+C`로 종료한 뒤 실행하세요.
 
 ```bash
-docker exec -it -w /opt/g1-edu-loco jsj-monitor bash -c 'exec python3 -m g1stairs.monitoring serve'
+(
+  set -e
+  ip -brief -4 address show up
+  read -rp '외부 PC에서 접속할 PC2의 LAN IPv4 주소 (/24 제외): ' pc2_ip
+  [[ -n "$pc2_ip" ]] || exit 1
+  docker exec -it -w /opt/g1-edu-loco jsj-monitor bash -ec \
+    'exec python3 -m g1stairs.monitoring serve --bind "$1"' _ "$pc2_ip"
+)
 ```
+
+**외부 PC에서** 같은 연구실 네트워크에 연결한 뒤 브라우저로 PC2 터미널의 `Monitoring dashboard at` 뒤에 출력된 URL을 여세요. 주소 형식은 `http://<PC2의 LAN IP>:8765/`입니다. 외부 PC에는 Python이나 Unitree SDK를 설치할 필요가 없습니다. 페이지의 `waiting`은 웹 연결에 성공했고 아직 `rt/lowstate` 첫 샘플을 기다린다는 뜻입니다. 실제 샘플을 받으면 다리 12축·허리 3축·팔 14축과 IMU가 표시됩니다.
 
 **③ 기록이 필요할 때만** 별도 PC2 터미널에서 실행합니다. 기본 10초간 기록한 후 실제 세션 이름을 출력합니다. [모니터링 필드·SDK 기본 설정](g1stairs/monitoring/README.md)
 

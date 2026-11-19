@@ -1,22 +1,31 @@
 # G1 EDU 전신 모니터링
 
-허리가 잠기지 않은 **29자유도 G1 EDU** 한 대를 대상으로 합니다. 이미 실행 중인 `jsj-monitor`에 들어갑니다. [컨테이너 최초 실행 및 Git 갱신](../../README.md)
+허리가 잠기지 않은 **29자유도 G1 EDU**의 상태를 PC2의 `jsj-monitor` 컨테이너가 수신하고, 외부 PC의 브라우저가 화면을 표시합니다. 최초 실행 시 [컨테이너 생성 및 코드 다운로드](../../README.md#monitoring)를 먼저 완료하세요.
+
+## 실시간 GUI
+
+**PC2에서** 아래 블록을 실행합니다. 표시되는 주소 중 외부 PC에서 PC2에 접속할 때 쓰는 LAN 주소를 입력하세요. 이미 서버가 떠 있으면 그 터미널에서 `Ctrl+C`로 종료한 뒤 실행하세요.
+
+```bash
+(
+  set -e
+  ip -brief -4 address show up
+  read -rp '외부 PC에서 접속할 PC2의 LAN IPv4 주소 (/24 제외): ' pc2_ip
+  [[ -n "$pc2_ip" ]] || exit 1
+  docker exec -it -w /opt/g1-edu-loco jsj-monitor bash -ec \
+    'exec python3 -m g1stairs.monitoring serve --bind "$1"' _ "$pc2_ip"
+)
+```
+
+**외부 PC에서** 같은 연구실 네트워크에 연결한 뒤 브라우저로 PC2 터미널의 `Monitoring dashboard at` 뒤에 출력된 URL을 여세요. 주소 형식은 `http://<PC2의 LAN IP>:8765/`입니다. 외부 PC에는 Python이나 Unitree SDK를 설치할 필요가 없습니다. 페이지의 `waiting`은 웹 연결에 성공했고 아직 `rt/lowstate` 첫 샘플을 기다린다는 뜻입니다.
+
+## 기록이 필요할 때
+
+별도 PC2 터미널에서 컨테이너 셸을 여세요.
 
 ```bash
 docker exec -it -w /opt/g1-edu-loco jsj-monitor bash
 ```
-
-## 실시간 GUI
-
-컨테이너 안에서 다음 한 줄을 실행합니다.
-
-```bash
-python3 -m g1stairs.monitoring serve
-```
-
-GUI의 기본 수신 주소는 PC2의 `127.0.0.1:8765`입니다.
-
-## 기록이 필요할 때
 
 새 실험 이름을 지정하면 기본 10초 동안 상태를 저장합니다.
 
