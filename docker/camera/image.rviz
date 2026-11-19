@@ -1,0 +1,27 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Camera image1
+        - /Camera image1/Topic1
+Visualization Manager:
+  Class: ""
+  Enabled: true
+  Displays:
+    - Class: rviz_default_plugins/Image
+      Name: Camera image
+      Enabled: true
+      Normalize Range: true
+      Topic:
+        Value: ""
+        History Policy: Keep Last
+        Depth: 2
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Value: true
+  Global Options:
+    Fixed Frame: map
+    Frame Rate: 30
+  Tools: []
+  Value: true

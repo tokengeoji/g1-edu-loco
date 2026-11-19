@@ -1,6 +1,6 @@
 # G1 EDU loco 실행 가이드
 
-처음 설정할 때는 **공통 베이스 이미지부터 빌드**합니다. 그다음 사용할 기능의 컨테이너를 만들고, 컨테이너 안에서 코드를 내려받아 실행합니다.
+처음 설정할 때는 **공통 베이스 이미지부터 빌드**합니다. RealSense 카메라 이미지는 카메라 프로그램을 포함합니다.
 
 | 원하는 작업 | PC2에서 실행할 순서 |
 | --- | --- |
@@ -12,45 +12,28 @@
 
 ## 1. PC2에서 공통 베이스 이미지 만들기
 
-PC2의 **Bash 터미널**에서 아래 블록 전체를 한 번 붙여넣으세요. Docker가 이 저장소의 Dockerfile을 읽어 `jsj-g1-base:foxy`를 빌드합니다. SDK 설치와 Git 복제는 이미지 빌드 안에서 실행됩니다. PC2의 L4T가 R35.3.1이면 부모 이미지가 자동 선택됩니다. 다른 버전이면 안내에 따라 해당 PC2와 호환되는 Ubuntu 20.04·ROS 2 Foxy ARM64 부모 이미지 태그를 입력하세요.
+G1-EDU의 개발 보드 **PC2**에서 실행합니다. `g1-jsj:base`에는 Ubuntu 20.04 ARM64, Python 3.8, ROS 2 Foxy, Cyclone DDS 0.10.2, Foxy용 `rmw_cyclonedds_cpp`와 Unitree SDK2가 들어갑니다. `g1-jsj:realsense`는 여기에 RealSense SDK, RViz2와 카메라 프로그램을 추가한 CPU 이미지입니다. PC2에서 GitHub와 Ubuntu·ROS 패키지 서버에 접근할 수 있어야 합니다. [공통 베이스 구성](docker/base/README.md)
 
-`jsj-g1-base:foxy`는 이 단계에서 PC2에 **만들어질 이미지 이름**입니다. `docker pull` 대상은 Dockerfile의 출발점이 되는 부모 이미지입니다.
+PC2에 이미 Git이 있으면 개인 작업 폴더에서 실행하세요. 기존 체크아웃은 `jsj` 브랜치에서 `git pull --ff-only` 후 같은 빌드 명령을 사용합니다.
 
 ```bash
-(
-  set -euo pipefail
-  if grep -Eq '^#[[:space:]]+R35[[:space:]].*REVISION:[[:space:]]*3\.1([,[:space:]]|$)' /etc/nv_tegra_release 2>/dev/null; then
-    parent='dustynv/ros:foxy-ros-base-l4t-r35.3.1'
-  else
-    cat /etc/nv_tegra_release 2>/dev/null || true
-    read -rp '이 PC2의 L4T와 호환되는 ARM64 Ubuntu 20.04/Foxy 이미지 태그(미확인 시 Enter로 종료): ' parent
-    [[ -n "$parent" ]] || exit 1
-  fi
-
-  if [[ "$parent" == jsj-g1-base:foxy ]]; then
-    echo 'jsj-g1-base:foxy는 빌드 결과입니다. 현재 L4T에 맞는 부모 이미지 태그를 입력하세요.' >&2
-    exit 1
-  fi
-  echo "[1/2] 부모 이미지 준비: $parent"
-  if ! docker image inspect "$parent" >/dev/null 2>&1; then
-    docker pull --platform linux/arm64 "$parent"
-  fi
-  [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}} {{if .Config.Volumes}}volumes{{else}}none{{end}}' "$parent")" == 'linux/arm64 none' ]] || {
-    echo '부모 이미지의 플랫폼과 VOLUME 선언을 확인하세요.' >&2
-    exit 1
-  }
-
-  echo '[2/2] GitHub Dockerfile로 공통 이미지 빌드'
-  BUILDKIT_PROGRESS=plain docker build --platform linux/arm64 --build-arg BASE_IMAGE="$parent" \
-    --tag jsj-g1-base:foxy \
-    https://raw.githubusercontent.com/tokengeoji/g1-edu-loco/main/docker/base/Dockerfile
-  docker image inspect --format 'jsj-g1-base:foxy  {{.Os}}/{{.Architecture}}  {{.Id}}' jsj-g1-base:foxy
-)
+git clone --single-branch --branch jsj https://github.com/tokengeoji/g1-edu-loco.git g1-jsj-camera
+cd g1-jsj-camera
+bash docker/camera/pc2.sh build
+bash docker/camera/pc2.sh discover --seconds 8
 ```
 
-마지막 줄에 `jsj-g1-base:foxy  linux/arm64  sha256:…`가 출력되면 빌드가 끝난 것입니다. 관절 상태를 보려면 [2번](#monitoring), 계단을 촬영하려면 [3번](#camera)으로 이동하세요. 이 이미지는 세 컨테이너에서 공통으로 사용하므로 최초 설정 때 한 번만 빌드하면 됩니다. [Dockerfile](docker/base/Dockerfile) · [이미지 구성과 SDK 확인 명령](docker/base/README.md#sdk) · [Docker 공식 빌드 문서](https://docs.docker.com/build/concepts/context/#how-to-build-without-a-context)
+호스트에 체크아웃을 놓지 않을 때는 아래 함수를 PC2 Bash에 정의하고 `g1cam build`, `g1cam discover --seconds 8`을 실행합니다. 이 경로에서는 Docker가 공개 Git 저장소의 `jsj` 브랜치를 빌드 컨텍스트로 사용합니다.
 
-빌드가 `Unauthorized`로 멈추면 [오류를 낸 서버 확인](docker/base/README.md#unauthorized)을 보세요.
+```bash
+g1cam() {
+  local script
+  script=$(curl -fsSL https://raw.githubusercontent.com/tokengeoji/g1-edu-loco/jsj/docker/camera/pc2.sh) &&
+    bash -c "$script" g1cam "$@"
+}
+```
+
+메시지 탐색과 터미널 확인 방법은 [카메라 실행 안내](#camera)에 있습니다.
 
 <a id="monitoring"></a>
 
@@ -62,7 +45,7 @@ PC2의 **Bash 터미널**에서 아래 블록 전체를 한 번 붙여넣으세�
 (
   set -e
   if docker container inspect jsj-monitor >/dev/null 2>&1; then
-    [[ "$(docker inspect -f '{{.Config.Image}}' jsj-monitor)" = jsj-g1-base:foxy ]] || {
+    [[ "$(docker inspect -f '{{.Config.Image}}' jsj-monitor)" =~ ^(g1-jsj:base|jsj-g1-base:foxy)$ ]] || {
       echo '같은 이름의 컨테이너가 다른 이미지를 사용합니다.' >&2
       exit 1
     }
@@ -70,19 +53,21 @@ PC2의 **Bash 터미널**에서 아래 블록 전체를 한 번 붙여넣으세�
   else
     docker run -d --name jsj-monitor --pull never --platform linux/arm64 \
       --network host --ipc private --cap-drop ALL --security-opt no-new-privileges:true \
-      jsj-g1-base:foxy sleep infinity
+      g1-jsj:base sleep infinity
   fi
   docker exec jsj-monitor bash -ec '
     repo=/opt/g1-edu-loco
     if [[ ! -d "$repo/.git" ]]; then
-      git clone --branch main --single-branch --sparse https://github.com/tokengeoji/g1-edu-loco.git "$repo"
+      git clone --branch jsj --single-branch --sparse https://github.com/tokengeoji/g1-edu-loco.git "$repo"
     fi
     cd "$repo"
     if [[ ! -f g1stairs/monitoring/__main__.py ]]; then
       git sparse-checkout init --cone
       git sparse-checkout set g1stairs/monitoring
     fi
-    git pull --ff-only
+    git fetch origin jsj:refs/remotes/origin/jsj
+    git switch jsj || git switch --track origin/jsj
+    git merge --ff-only origin/jsj
     git rev-parse --short HEAD
   '
 )
@@ -115,82 +100,61 @@ docker exec -w /opt/g1-edu-loco jsj-monitor bash -ec \
 
 <a id="camera"></a>
 
-## 3. D435i 깊이 영상 기록
+## 3. D435i 카메라
 
-**① 카메라 컨테이너 준비 및 코드 다운로드**.
-
-```bash
-(
-  set -e
-  if docker container inspect jsj-camera >/dev/null 2>&1; then
-    [[ "$(docker inspect -f '{{.Config.Image}}' jsj-camera)" = jsj-g1-base:foxy ]] || {
-      echo '같은 이름의 컨테이너가 다른 이미지를 사용합니다.' >&2
-      exit 1
-    }
-    docker start jsj-camera >/dev/null
-  else
-    docker run -d --name jsj-camera --pull never --platform linux/arm64 --runtime nvidia \
-      --network host --ipc private --cap-drop ALL --security-opt no-new-privileges:true \
-      jsj-g1-base:foxy sleep infinity
-  fi
-  docker exec jsj-camera bash -ec '
-    repo=/opt/g1-edu-loco
-    if [[ ! -d "$repo/.git" ]]; then
-      git clone --branch main --single-branch --sparse https://github.com/tokengeoji/g1-edu-loco.git "$repo"
-    fi
-    cd "$repo"
-    if [[ ! -f g1stairs/camera/__main__.py ]]; then
-      git sparse-checkout init --cone
-      git sparse-checkout set g1stairs/camera
-    fi
-    git pull --ff-only
-    git rev-parse --short HEAD
-  '
-)
-```
-
-**② 기존 발행자 확인**. 발행자와 같은 DDS 도메인에서 확인합니다. 기본 도메인이 다른 현장에서는 PC2 터미널에 실제 도메인을 `G1_CAMERA_DOMAIN`으로 설정하면 아래 명령이 사용합니다.
+Unitree의 `Depth Camera Routine`은 개발 보드의 D435i를 librealsense로 열거나 ROS 카메라 드라이버로 발행하는 방법을 설명합니다. 기체에서 현재 실행 중인 발행자는 현장에서 확인합니다. ROS 2 역시 DDS를 사용하므로 같은 ROS 영상 스트림이 ROS 그래프와 DDS 발행 목록에 함께 나타날 수 있습니다. [Unitree Depth Camera Routine](https://support.unitree.com/home/en/G1_developer/depth_camera_instruction)
 
 ```bash
-docker exec -e ROS_DOMAIN_ID="${G1_CAMERA_DOMAIN:-0}" jsj-camera bash -c 'ros2 topic list -t'
+bash docker/camera/pc2.sh discover --seconds 8
 ```
 
-**③ 실제 연결 상태에 해당하는 블록 하나만 실행합니다.** 기록을 마치면 출력에서 `source`, `frame_count`, `depth_scale_m`, `invalid_depth_fraction`을 확인합니다. 실험 이름은 현재 시각으로 만들어집니다.
+이 명령은 `g1-jsj-realsense` 컨테이너를 생성하거나 다시 시작합니다. 기본 도메인은 현재 셸의 `ROS_DOMAIN_ID`(미설정 시 0)입니다. 발행자의 도메인이 다르면 `G1_CAMERA_DOMAIN`으로 지정하세요. NIC가 여러 개라면 `ip -br -4 addr`로 확인한 로봇 네트워크 인터페이스명을 `G1_CAMERA_IFACE`에 지정한 뒤 같은 명령을 반복하세요.
 
-**기존 D435i ROS 2 발행자가 있는 경우**. 안내가 나오면 보정된 원본 깊이 영상(`16UC1`)의 실제 토픽, 짝이 되는 `CameraInfo` 토픽, 해당 발행자가 사용하는 깊이 한 단위당 미터 값을 입력합니다. [ROS 2 CameraInfo](https://github.com/ros2/common_interfaces/blob/foxy/sensor_msgs/msg/CameraInfo.msg)
+| 실제 출력 | PC2에서 확인하는 방법 |
+|---|---|
+| `ros_images`의 `sensor_msgs/msg/Image`에서 `samples_received > 0` | 그래픽 터미널에서 `bash docker/camera/pc2.sh rviz`. RViz 왼쪽 **Camera image → Topic**에서 해당 이름을 선택합니다. 센서 QoS는 Best Effort로 설정되어 있습니다. |
+| `sensor_msgs/msg/CompressedImage`에서 샘플 수신 | JPEG/PNG 또는 Foxy compressedDepth PNG이면 아래 변환을 별도 터미널에서 실행하고 RViz에서 `/g1_jsj/view_image`를 선택합니다. |
+| `dds_publications`에서 카메라 발행자가 사용하는 DDS 토픽·타입을 확인 | 아래 `tty-dds`로 실제 샘플을 읽습니다. 영상 바이트는 길이로, 숫자 필드는 값으로 표시합니다. XTypes를 제공하지 않는 발행자는 동일한 Python IDL 클래스가 필요합니다. |
+| `NO_CONFIRMED_ROS_IMAGE` 또는 카메라 DDS 타입이 불명확함 | 도메인·NIC·발행 프로그램을 확인합니다. USB D435i가 PC2에 있고 다른 프로그램이 장치를 점유하지 않을 때는 `probe-usb`와 `tty-usb`를 사용합니다. |
+
+`frame_id`, 인코딩, 발행 노드를 센서 설정과 대조해 **헤드 D435i의 깊이**인지 확인하세요. 같은 네트워크의 다른 카메라도 목록에 포함될 수 있습니다. `16UC1`과 `32FC1`은 깊이에 사용할 수 있는 픽셀 형식입니다. 토픽 이름이나 픽셀 형식만으로 센서 또는 미터 환산 단위를 정할 수 없습니다.
+
+```bash
+# ROS 2 압축 영상. TOPIC에 실제 수신한 CompressedImage 토픽을 입력합니다.
+read -rp 'CompressedImage topic: ' TOPIC
+bash docker/camera/pc2.sh compressed-view "$TOPIC"
+
+# 네이티브 DDS. 발견 결과와 발행자 문서에서 확인한 정확한 이름을 사용합니다.
+read -rp 'DDS topic: ' TOPIC
+read -rp 'DDS type: ' TYPE
+bash docker/camera/pc2.sh tty-dds --topic "$TOPIC" --type "$TYPE" --seconds 8
+
+# USB 직접 확인. probe는 장치와 지원 프로필을 읽고, tty-usb가 스트림을 엽니다.
+bash docker/camera/pc2.sh probe-usb
+bash docker/camera/pc2.sh tty-usb --seconds 5
+```
+
+RViz 실행에는 X11 디스플레이와 유효한 `DISPLAY`·`XAUTHORITY`가 필요합니다. PC2 화면이 없으면 같은 DDS 도메인에 연결된 Linux PC에서 RViz2를 열어 같은 영상 토픽을 선택할 수 있습니다. USB는 공식 예제의 `640×480, 60 FPS, Z16`을 기본으로 사용합니다. `probe-usb` 출력에 따라 `--width`, `--height`, `--fps`를 바꿀 수 있습니다. `DEVICE_BUSY`가 뜨면 현재 장치를 여는 발행자를 확인하세요.
+
+### 깊이 기록
+
+보정된 `16UC1` 깊이 프레임과 같은 촬영 시각의 `sensor_msgs/msg/CameraInfo`가 발행되고 있을 때 PC2에서 실행합니다. 단위는 발행자 설정에 맞게 입력하세요.
 
 ```bash
 RUN_ID="stairs-$(date -u +%Y%m%dT%H%M%SZ)"
-(
-  set -e
-  read -rp '실제 D435i 깊이 영상 토픽: ' depth_topic
-  read -rp '같은 촬영 시각·좌표계의 CameraInfo 토픽: ' info_topic
-  read -rp '발행자의 깊이 한 단위당 미터 값: ' depth_unit
-  docker exec -e ROS_DOMAIN_ID="${G1_CAMERA_DOMAIN:-0}" -w /opt/g1-edu-loco jsj-camera bash -ec \
-    'python3 -m g1stairs.camera record-ros --depth-topic "$1" --info-topic "$2" --depth-scale-m "$3" --runs-dir /workspace/jsj-camera/runs --run "$4"' \
-    _ "$depth_topic" "$info_topic" "$depth_unit" "$RUN_ID"
-  echo "완료된 실험: $RUN_ID"
-)
+read -rp 'Depth Image topic: ' depth_topic
+read -rp 'CameraInfo topic: ' info_topic
+read -rp 'Metres per stored depth unit: ' depth_unit
+bash docker/camera/pc2.sh record-ros --depth-topic "$depth_topic" --info-topic "$info_topic" \
+  --depth-scale-m "$depth_unit" --run "$RUN_ID" --runs-dir /workspace/jsj-camera/runs
 ```
 
-**SDK로 직접 수집하는 경우**. 기존 발행자가 장치를 쓰지 않고 D435i가 컨테이너에 보이는 상태에서 사용합니다. 블록은 바인딩을 확인하고, 없으면 해당 컨테이너에 공식 Python 3.8 호환 휠을 설치합니다. 공식 예제의 요청 규격은 640×480, 60 FPS, Z16입니다. 실제 장치가 이 규격을 지원해야 녹화가 시작됩니다. [Unitree Depth Camera Routine](https://support.unitree.com/home/en/G1_developer/depth_camera_instruction) · [RealSense 배포 파일](https://pypi.org/project/pyrealsense2/2.54.1.5217/#files)
+USB로 직접 기록할 실험은 컨테이너를 처음 만들 때 `bash docker/camera/pc2.sh start --usb`로 D435i를 연결합니다. 이후 아래 명령을 사용하세요. 관측만 필요한 `tty-usb`는 기존 컨테이너의 USB 설정과 관계없이 실행됩니다.
 
 ```bash
 RUN_ID="stairs-$(date -u +%Y%m%dT%H%M%SZ)"
-(
-  set -e
-  docker exec jsj-camera bash -ec '
-  if ! python3 -c "import pyrealsense2" 2>/dev/null; then
-    python3 -m pip install --user --no-cache-dir --only-binary=:all: --no-deps pyrealsense2==2.54.1.5217
-  fi
-  python3 -c "import pyrealsense2 as rs; print(rs.__file__)"
-'
-  docker exec -w /opt/g1-edu-loco jsj-camera bash -ec '
-    python3 -m g1stairs.camera probe
-    python3 -m g1stairs.camera record --runs-dir /workspace/jsj-camera/runs --run "$1"
-  ' _ "$RUN_ID"
-  echo "완료된 실험: $RUN_ID"
-)
+docker exec g1-jsj-realsense python3 -m g1stairs.camera record \
+  --run "$RUN_ID" --runs-dir /workspace/jsj-camera/runs --seconds 10
 ```
 
 <a id="geometry"></a>
@@ -203,7 +167,7 @@ RUN_ID="stairs-$(date -u +%Y%m%dT%H%M%SZ)"
 (
   set -e
   if docker container inspect jsj-footstep-workbench >/dev/null 2>&1; then
-    [[ "$(docker inspect -f '{{.Config.Image}}' jsj-footstep-workbench)" = jsj-g1-base:foxy ]] || {
+    [[ "$(docker inspect -f '{{.Config.Image}}' jsj-footstep-workbench)" =~ ^(g1-jsj:base|jsj-g1-base:foxy)$ ]] || {
       echo '같은 이름의 컨테이너가 다른 이미지를 사용합니다.' >&2
       exit 1
     }
@@ -211,19 +175,21 @@ RUN_ID="stairs-$(date -u +%Y%m%dT%H%M%SZ)"
   else
     docker run -d --name jsj-footstep-workbench --pull never --platform linux/arm64 \
       --network bridge --ipc private --cap-drop ALL --security-opt no-new-privileges:true \
-      jsj-g1-base:foxy sleep infinity
+      g1-jsj:base sleep infinity
   fi
   docker exec jsj-footstep-workbench bash -ec '
     repo=/opt/g1-edu-loco
     if [[ ! -d "$repo/.git" ]]; then
-      git clone --branch main --single-branch --sparse https://github.com/tokengeoji/g1-edu-loco.git "$repo"
+      git clone --branch jsj --single-branch --sparse https://github.com/tokengeoji/g1-edu-loco.git "$repo"
     fi
     cd "$repo"
     if [[ ! -f g1stairs/geometry/__main__.py ]]; then
       git sparse-checkout init --cone
       git sparse-checkout set g1stairs/geometry config
     fi
-    git pull --ff-only
+    git fetch origin jsj:refs/remotes/origin/jsj
+    git switch jsj || git switch --track origin/jsj
+    git merge --ff-only origin/jsj
     git rev-parse --short HEAD
   '
 ) &&
@@ -241,17 +207,17 @@ docker exec jsj-footstep-workbench bash -ec '
 (
   set -euo pipefail
   if [[ -z "${RUN_ID:-}" ]]; then
-    docker exec jsj-camera bash -c 'cd /workspace/jsj-camera/runs && ls -d */depth/manifest.json'
+    docker exec g1-jsj-realsense bash -c 'cd /workspace/jsj-camera/runs && ls -d */depth/manifest.json'
     read -rp '분석할 실험 이름: ' RUN_ID
   fi
   [[ "$RUN_ID" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]] || { echo '실험 이름을 확인하세요.' >&2; exit 1; }
   src="/workspace/jsj-camera/runs/$RUN_ID"
   dst="/workspace/jsj-footstep-workbench/runs/$RUN_ID"
-  docker exec jsj-camera test -s "$src/depth/manifest.json"
+  docker exec g1-jsj-realsense test -s "$src/depth/manifest.json"
   docker exec jsj-footstep-workbench mkdir -p "$dst"
   if ! docker exec jsj-footstep-workbench test -e "$dst/depth"; then
     tmp=$(docker exec jsj-footstep-workbench mktemp -d "$dst/.incoming-XXXXXX")
-    docker exec jsj-camera tar -C "$src" -cf - depth \
+    docker exec g1-jsj-realsense tar -C "$src" -cf - depth \
       | docker exec -i jsj-footstep-workbench tar --no-same-owner -C "$tmp" -xf -
     docker exec jsj-footstep-workbench test -s "$tmp/depth/manifest.json"
     docker exec jsj-footstep-workbench mv -Tn "$tmp/depth" "$dst/depth"
@@ -292,7 +258,7 @@ GUI를 끝내려면 실행 터미널에서 `Ctrl+C`를 누릅니다. 컨테이�
 
 ```bash
 docker stop jsj-monitor
-docker stop jsj-camera
+docker stop g1-jsj-realsense
 docker stop jsj-footstep-workbench
 ```
 

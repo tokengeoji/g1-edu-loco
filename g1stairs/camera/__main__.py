@@ -10,7 +10,7 @@ import numpy as np
 
 from g1stairs.session import create_part, dump_line, read_json, read_jsonl, run_path, write_json
 
-from . import realsense, ros_depth
+from . import inspection, realsense, ros_depth
 
 
 def _metadata(source, clock):
@@ -148,6 +148,17 @@ def main(argv=None):
     probe = commands.add_parser("probe", help="check for the G1's D435i and list its Z16 profiles")
     record = commands.add_parser("record", help="record D435i depth; G1 guide default: 640x480 at 60 Hz Z16")
     ros_record = commands.add_parser("record-ros", help="subscribe to existing D435i Depth and CameraInfo")
+    discover = commands.add_parser("discover", help="inspect live ROS images and enumerate DDS publication topic/type pairs")
+    tty_dds = commands.add_parser("tty-dds", help="read an advertised DDS writer and print sample metadata")
+    tty_usb = commands.add_parser("tty-usb", help="open a selected D435i directly and print bounded Z16 frame statistics")
+    for command in (discover, tty_dds, tty_usb):
+        command.add_argument("--seconds", type=_positive, default=5.0)
+    tty_dds.add_argument("--topic", required=True, help="exact DDS writer topic from discover")
+    tty_dds.add_argument("--type", required=True, help="exact advertised DDS type name from discover")
+    tty_dds.add_argument("--idl-class", help="installed publisher IDL Python class as MODULE:CLASS, if needed")
+    discover.set_defaults(action=lambda args: inspection.discover(args.seconds))
+    tty_dds.set_defaults(action=inspection.tty_dds)
+    tty_usb.set_defaults(action=inspection.tty_usb)
     replay = commands.add_parser("replay", help="validate and summarize every stored frame")
     for command in (probe, record, ros_record, replay):
         command.add_argument("--runs-dir", type=Path, default=Path("runs"))
@@ -155,11 +166,12 @@ def main(argv=None):
             command.add_argument("--run", required=True)
     for command in (probe, record):
         command.add_argument("--source", choices=("realsense",), default="realsense")
-    record.add_argument("--device-index", type=_int_at_least(0))
     width, height, fps = realsense.G1_DEPTH_PROFILE
-    record.add_argument("--width", type=_int_at_least(1), default=width)
-    record.add_argument("--height", type=_int_at_least(1), default=height)
-    record.add_argument("--fps", type=_int_at_least(1), default=fps)
+    for command in (record, tty_usb):
+        command.add_argument("--device-index", type=_int_at_least(0))
+        command.add_argument("--width", type=_int_at_least(1), default=width)
+        command.add_argument("--height", type=_int_at_least(1), default=height)
+        command.add_argument("--fps", type=_int_at_least(1), default=fps)
     for command in (record, ros_record):
         command.add_argument("--seconds", type=_positive, default=10.0)
         command.add_argument("--calibration", type=Path)
@@ -176,7 +188,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         print(json.dumps(args.action(args), ensure_ascii=False, indent=2, allow_nan=False))
-    except (KeyError, TypeError, ValueError, OSError, realsense.CameraError) as exc:
+    except ImportError as exc:
+        print(json.dumps({"status": "DEPENDENCY_MISSING", "detail": str(exc)}), file=sys.stderr)
+        return 1
+    except (KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
         if isinstance(exc, realsense.CameraError):
             status, _, detail = str(exc).partition(": ")
         else:
