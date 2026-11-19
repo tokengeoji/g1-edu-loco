@@ -5,99 +5,144 @@
 
 <a id="pc2"></a>
 
-## PC2에서 한 번 준비
+## PC2에서 이미지 빌드
 
-G1-EDU의 PC2에 SSH로 접속해 실행한다. PC2 호스트에 프로그램을 설치하거나 Git 저장소를 내려받을 필요가 없다. Docker Engine이 GitHub의 `jsj` 브랜치를 읽어서 **로컬 CPU 이미지**를 빌드한다. 최초 빌드에는 인터넷 연결이 필요하다.
-
-1. `docker image inspect g1-jsj:base`로 공통 이미지가 있는지 확인한다. 없으면 [베이스 빌드 명령](docker/base/README.md)의 첫 코드 블록을 실행한다.
-2. 아래 명령으로 온도·텔레옵·카메라·계단 계산이 들어 있는 통합 이미지를 빌드한다.
-3. [PC2 컨테이너 시작 명령](docker/tools/pc2.sh)의 코드 전체를 PC2 Bash에 한 번 붙여넣어 실행한다. 다음 실험에도 같은 명령을 사용한다. USB 직접 촬영을 사용할 때는 D435i가 PC2에서 인식된 상태에서 처음 생성한다.
+G1-EDU PC2에 SSH로 접속한 상태에서 아래 Docker 명령을 실행한다. Docker Engine이 공개 Git 브랜치를 빌드 컨텍스트로 가져온다. 맥북 작업, PC2 호스트 체크아웃, Docker 로그인은 필요 없다.
 
 ```bash
-docker build --pull=false --platform linux/arm64 \
-  -f docker/tools/Dockerfile -t jsj-g1-tools:foxy \
-  'https://github.com/tokengeoji/g1-edu-loco.git#jsj'
+docker image ls
 ```
+
+**`g1-jsj:base`가 이미 있으면** 아래 통합 이미지 빌드부터 진행한다. **처음 설치하고 로컬 Ubuntu 부모 이미지도 없으면** Canonical의 Ubuntu 20.04 ARM64 루트 파일시스템을 가져와 공통 베이스를 빌드한다. 기존 로컬 Ubuntu 태그를 활용하는 경우는 [베이스 빌드 안내](docker/base/README.md)를 따른다.
+
+```bash
+docker import --change 'CMD ["/bin/bash"]' 'https://partner-images.canonical.com/oci/focal/20250530.1/ubuntu-focal-oci-arm64-root.tar.gz' jsj-ubuntu:20.04
+docker build --pull=false --platform linux/arm64 --build-arg BASE_IMAGE=jsj-ubuntu:20.04 -f docker/base/Dockerfile -t g1-jsj:base 'https://github.com/tokengeoji/g1-edu-loco.git#jsj'
+```
+
+공통 베이스를 준비한 뒤 통합 이미지를 빌드한다. 업데이트할 때도 같은 명령으로 공개 Git 소스의 변경을 가져온다. 실행 중인 컨테이너에 새 이미지를 적용하는 방법은 [기존 기록 보관](#resume)을 참고한다.
+
+```bash
+docker build --pull=false --platform linux/arm64 -f docker/tools/Dockerfile -t jsj-g1-tools:foxy 'https://github.com/tokengeoji/g1-edu-loco.git#jsj'
+docker ps -a --filter name=jsj-g1-tools
+```
+
+## 컨테이너 생성과 시작
+
+같은 이름이 이미 있으면 소유한 컨테이너인지 확인하고 [기존 컨테이너 재개](#resume)로 이동한다. 첫 생성은 카메라 연결 방식에 따라 다음 중 하나를 고른다.
+
+**로봇 네트워크의 ROS 2·DDS 카메라**를 쓸 때는 아래와 같이 생성한다. 이 구성에서 온도, 텔레옵, 카메라 토픽 탐색, 계단 계산을 모두 실행할 수 있다.
+
+```bash
+docker create --name jsj-g1-tools --pull never --init --runtime=runc --network host --cap-drop ALL --security-opt no-new-privileges:true --log-driver none jsj-g1-tools:foxy && docker start jsj-g1-tools
+```
+
+**PC2에 USB로 직접 연결한 D435i**에서 촬영하려면 카메라를 연결한 뒤 아래 명령을 먼저 실행한다. 출력에 표시된 D435i 장치 경로를 확인하고, 도구가 출력한 Docker 생성·시작 명령을 그대로 실행한다. 이렇게 생성한 컨테이너에서도 ROS 2·DDS 탐색과 나머지 기능을 함께 사용한다.
+
+```bash
+docker run --pull never --rm --runtime=runc --network none --cap-drop ALL --security-opt no-new-privileges:true --entrypoint /usr/local/bin/g1-pc2-create-command jsj-g1-tools:foxy
+```
+
+실행 중인 컨테이너에서 로봇용 유선 인터페이스를 확인한다. 아래 모든 예시의 `eth0`는 **온도 모니터가 정상 수신한 실제 NIC 이름**으로 바꾼다.
 
 ```bash
 docker exec jsj-g1-tools g1 --help
 docker exec jsj-g1-tools g1 interfaces
 ```
 
-아래부터는 모두 **같은 컨테이너**에 접속하는 명령이다. 각 SSH 터미널에서 쓸 NIC는 기존 온도 모니터가 정상 작동한 로봇용 유선 인터페이스다.
-
 <a id="monitoring"></a>
 
 ## 온도 측정과 키보드 조작
 
-**터미널 1**에서 원본 배터리·온도 모니터를 실행해 둔다. 모터·배터리 최신 수신 상태를 확인한다. 원본은 DDS 도메인 0을 사용한다. 관절·IMU 대시보드와 상태 기록은 [모니터 안내](src/g1stairs/monitoring/README.md)를 따른다.
+**터미널 1**에서 원본 C++ 모니터를 실행해 둔다. 모터·배터리의 최신 샘플과 온도를 확인한다. 원본은 DDS 도메인 0을 사용한다. [관절·IMU 대시보드와 상태 기록](src/g1stairs/monitoring/README.md)
 
 ```bash
-read -rp '로봇 NIC: ' G1_IFACE
-docker exec -it jsj-g1-tools g1 health "$G1_IFACE"
+docker exec -it jsj-g1-tools g1 health eth0
 ```
 
-**터미널 2**에서 상태 조회부터 한다. 기체와 왕복 통신이 되면 실제 FSM, NIC, 도메인, 응답한 서비스(`sport` 또는 `loco`)가 표시된다. `--dry-run`에서 키 배치를 연습할 수 있다.
+**터미널 2**에서 `--status`로 현재 FSM과 응답한 보행 서비스(`sport` 또는 `loco`)를 조회한다. `--dry-run`은 로봇에 연결하지 않고 키 배치를 연습한다.
 
 ```bash
-read -rp '같은 로봇 NIC: ' G1_IFACE
-docker exec jsj-g1-tools g1 teleop --status --interface "$G1_IFACE" --domain 0
+docker exec jsj-g1-tools g1 teleop --status --interface eth0 --domain 0
 docker exec -it jsj-g1-tools g1 teleop --dry-run
 ```
 
-실기체 첫 동작은 숙련자 입회하에 온도·배터리, 기체 지지와 물리 조종기를 확인한 뒤 진행한다. `--live` 시작 후 `r`로 활성화하고 `f`로 모드를 읽는다. 기본 보행 요청은 `2` → `Enter`이며 **실제 FSM 500**에서 이동한다. `w/s`는 전후, `a/d`는 좌우, `q/e`는 회전, `Space`는 이동 속도 0이다. 컨테이너 내부에서는 한 번에 한 터미널만 실기체 제어를 연다. 이전 텔레옵 컨테이너나 다른 PC의 보행 명령 송신기는 현장에서 별도로 종료 여부를 확인한다. [전체 키 배치와 모드 전환 조건](src/g1_teleop/README.md)
+첫 실기체 조작 전에 숙련자와 함께 온도·배터리, 기체 지지, 주변 공간과 물리 조종기를 확인한다. 다른 텔레옵 송신기의 실행 여부도 확인한다. **팔 고정이 필수인 실험은 여기서 멈춘다.** 텔레옵은 팔 명령을 보내지 않는다. Unitree가 문서화한 29자유도 Run(FSM 802)에서는 내장 보행기의 팔 흔들림을 끄는 공식 API가 확인되지 않았다. [Unitree 상체 제어 지원 모드](https://github.com/unitreerobotics/xr_teleoperate)
 
 ```bash
-docker exec -it jsj-g1-tools g1 teleop --live --interface "$G1_IFACE" --domain 0
+docker exec -it jsj-g1-tools g1 teleop --live --interface eth0 --domain 0
 ```
+
+**실제 FSM이 802이면 방향 입력이 즉시 동작한다.** 다른 상태에서는 현재 자세와 공식 전환 조건을 확인하고 `2` → `Enter`로 FSM 802를 요청한다. `f`로 실제 FSM을 확인한다. 각 이동 입력은 최대 0.25초간 유효하다.
+
+| 키 | 조작 |
+| --- | --- |
+| `w/s`, `a/d`, `q/e` | 전후 이동, 좌우 이동, 좌우 회전 |
+| `+/-` | 다음 이동 입력의 속도 배율 조절(0.5~2배) |
+| `!`, `@`, `#`, `$` | FSM 802에서 SDK 속도 상한을 각각 1.0, 2.0, 2.7, 3.0 m/s로 설정 |
+| `2` → `Enter` | 29자유도 Run(FSM 802) 요청 |
+| `m` → `Enter` | Unitree 일반 보행(Walk Motion, FSM 500)을 명시적으로 선택 |
+| `8` → `Enter` | 허리 3자유도 보행(FSM 501) 요청. 해당 모델에서 `--waist-3dof`로 실행하는 경우에 사용 |
+| `f`, `Space`, `x`, `?` | 실제 FSM 조회, 속도 0 요청, 종료, 전체 키 도움말 |
+
+기립·쪼그림·의자 앉기·댐핑을 포함한 자세 변경은 숫자를 선택하고 4초 이내에 `Enter`로 요청한다. [전체 키 배치와 모드 전환 조건](src/g1_teleop/README.md)
 
 <a id="camera"></a>
 
-## 카메라 설정 → 영상 확인 → 깊이 기록
+## 카메라 토픽 확인과 깊이 기록
 
-**터미널 3**에서 먼저 실제 발행자와 수신 샘플을 확인한다. 같은 ROS 2 영상 스트림이 ROS 그래프와 DDS 목록에 함께 보일 수 있다. 발행자, 타입, 광학 프레임으로 헤드 D435i의 깊이 영상인지 대조한다.
+**터미널 3**에서 발행자와 수신 샘플을 확인한다. ROS 2 영상 하나가 ROS 그래프와 DDS 목록에 모두 나타날 수 있다. 발행자, 타입, 실제 수신 건수와 광학 프레임을 확인해 헤드 D435i 스트림을 식별한다.
 
 ```bash
-docker exec jsj-g1-tools g1 camera discover --seconds 8
+docker exec -e G1_CAMERA_IFACE=eth0 -e G1_CAMERA_DOMAIN=0 jsj-g1-tools g1 camera discover --seconds 8
 ```
 
-| 관측 결과 | 같은 컨테이너에서 할 일 |
+| 관측 결과 | 같은 컨테이너에서 확인하는 방법 |
 | --- | --- |
-| `sensor_msgs/msg/Image`에서 실제 영상 수신 | `docker exec -it jsj-g1-tools g1 camera rviz` 실행. PC2 브라우저에서 터미널에 나온 로컬 주소를 열고 RViz2의 **Camera image → Topic**에서 수신 토픽을 선택한다. 센서 QoS는 Best Effort다. |
-| 지원되는 `sensor_msgs/msg/CompressedImage` 수신 | `docker exec -it jsj-g1-tools g1 camera compressed-view "$TOPIC"`으로 풀고 다른 터미널의 RViz2에서 `/g1_jsj/view_image`를 선택한다. |
-| ROS 이미지가 없고 네이티브 DDS 발행자가 보임 | 탐색 출력의 실제 DDS 이름과 타입으로 `docker exec jsj-g1-tools g1 camera tty-dds --topic "$TOPIC" --type "$TYPE" --seconds 5`를 실행한다. XTypes가 없으면 발행자의 공식 IDL 클래스가 필요하다. |
-| PC2의 USB에 D435i가 직접 연결됨 | `docker exec jsj-g1-tools g1 camera probe-usb`로 장치와 프로필을 확인하고 `docker exec jsj-g1-tools g1 camera tty-usb --seconds 5`로 샘플을 확인한다. USB를 점유 중인 다른 프로그램이 있으면 그 발행자의 영상을 쓴다. |
+| ROS 2 `sensor_msgs/msg/Image` 수신 | 아래 RViz2 명령을 실행하고 PC2 브라우저에서 출력된 로컬 주소를 연다. **Camera image → Topic**에서 수신한 토픽을 선택한다. 센서 QoS는 Best Effort다. |
+| 지원되는 ROS 2 `sensor_msgs/msg/CompressedImage` 수신 | 아래 압축 영상 명령의 마지막 인자를 탐색 결과의 실제 토픽으로 바꾼다. 다른 터미널에서 RViz2를 열고 `/g1_jsj/view_image`를 선택한다. |
+| 네이티브 DDS 발행자 발견 | 아래 TTY 명령의 `DISCOVERED_TOPIC`과 `DISCOVERED_TYPE`을 동일한 발행자 행의 이름과 타입으로 바꾼다. XTypes가 없으면 발행자의 공식 IDL 클래스를 지정한다. |
+| PC2 USB에 직접 연결된 D435i | USB 장치를 포함해 생성한 컨테이너에서 아래 `probe-usb`와 `tty-usb`로 프로필과 실제 샘플을 확인한다. USB를 이미 사용 중인 프로그램이 있으면 해당 프로그램의 영상 토픽을 사용한다. |
 
-도메인이나 카메라 NIC를 지정하려면 각 카메라 명령의 `docker exec`에 `-e G1_CAMERA_DOMAIN=값 -e G1_CAMERA_IFACE=인터페이스명`을 추가한다. 예를 들어 `docker exec -e G1_CAMERA_DOMAIN=0 -e G1_CAMERA_IFACE="$G1_IFACE" jsj-g1-tools g1 camera discover`처럼 사용한다.
-
-ROS 2에서 **보정된 원시 깊이 영상(`16UC1`)과 같은 촬영 시각·광학 프레임의 CameraInfo**가 발행되고 있을 때 다음과 같이 기록한다. 셸 변수에는 실제 값을 입력한다. 깊이 단위는 발행자의 설정에서 확인한다. USB 직접 기록은 SDK가 장치에서 깊이 스케일을 읽는다. 계단 측정용 녹화는 보정 때와 같은 자세로 기체를 정지시킨 상태에서 한다.
+아래에서 해당하는 명령만 실행한다. 카메라가 다른 NIC나 도메인을 사용하면 탐색·뷰어·기록 명령 모두에 같은 값을 지정한다.
 
 ```bash
-RUN_ID=$(docker exec jsj-g1-tools date -u +stairs-%Y%m%dT%H%M%SZ)
-read -rp 'Depth Image topic: ' DEPTH_TOPIC
-read -rp 'CameraInfo topic: ' INFO_TOPIC
-read -rp '발행자에서 확인한 깊이 1단위당 미터: ' DEPTH_SCALE
-docker exec jsj-g1-tools g1 camera record-ros --run "$RUN_ID" --seconds 10 \
-  --depth-topic "$DEPTH_TOPIC" --info-topic "$INFO_TOPIC" --depth-scale-m "$DEPTH_SCALE"
+docker exec -it -e G1_CAMERA_IFACE=eth0 -e G1_CAMERA_DOMAIN=0 jsj-g1-tools g1 camera rviz
+docker exec -it -e G1_CAMERA_IFACE=eth0 -e G1_CAMERA_DOMAIN=0 jsj-g1-tools g1 camera compressed-view /camera/color/image_raw/compressed
+docker exec -e G1_CAMERA_IFACE=eth0 -e G1_CAMERA_DOMAIN=0 jsj-g1-tools g1 camera tty-dds --topic DISCOVERED_TOPIC --type DISCOVERED_TYPE --seconds 5
+docker exec jsj-g1-tools g1 camera probe-usb
+docker exec jsj-g1-tools g1 camera tty-usb --seconds 5
 ```
 
-USB에서 바로 기록할 때는 위 ROS 기록 명령 대신 아래 블록을 사용한다. 현장에서 `probe-usb`로 지원 여부를 확인한 뒤 가이드 기본값인 `640×480, 60 FPS, Z16` 또는 지원되는 다른 프로필을 사용한다.
+계단 촬영 전 기체를 보정 때와 같은 자세로 정지시킨다. 아래에서는 실험 이름을 **`stairs-01`**로 통일했다. 새 실험은 `stairs-02`처럼 새 이름을 정하고 기록·보정·계산 명령에 똑같이 쓴다.
+
+**ROS 2 깊이 기록**에는 원시 깊이 영상(`16UC1`)과 촬영 시각·광학 프레임이 일치하는 `CameraInfo`가 필요하다. 아래는 발행자가 1단위당 **0.001 m**로 설정되어 있고 두 토픽 이름이 예시와 일치할 때의 명령이다. 카메라 발행자에서 확인한 단위와 토픽을 입력한다.
 
 ```bash
-RUN_ID=$(docker exec jsj-g1-tools date -u +stairs-%Y%m%dT%H%M%SZ)
-docker exec jsj-g1-tools g1 camera record --run "$RUN_ID" --seconds 10
+docker exec -e G1_CAMERA_IFACE=eth0 -e G1_CAMERA_DOMAIN=0 jsj-g1-tools g1 camera record-ros --run stairs-01 --seconds 10 --depth-topic /camera/depth/image_rect_raw --info-topic /camera/depth/camera_info --depth-scale-m 0.001
+```
+
+**USB 깊이 기록**은 `probe-usb`에서 확인한 프로필로 실행한다. 기본 프로필은 640×480, 60 Hz, Z16이며 깊이 단위는 RealSense SDK가 장치에서 읽는다. 한 실험에는 ROS 또는 USB 중 한 경로로 깊이를 기록한다.
+
+```bash
+docker exec jsj-g1-tools g1 camera record --run stairs-01 --seconds 10
+```
+
+동시에 상태를 기록하려면 별도 터미널에서 같은 실험 이름을 사용한다.
+
+```bash
+docker exec jsj-g1-tools g1 monitor record --nic eth0 --domain 0 --run stairs-01 --seconds 10
 ```
 
 <a id="geometry"></a>
 
 ## 같은 기록으로 계단 높이·디딤면 깊이·폭 계산
 
-촬영한 깊이와 분석 결과는 `/workspace/runs/<RUN_ID>/depth/`와 `geometry/`에 각각 저장된다. 기록 직후 같은 터미널에서 같은 `RUN_ID`를 사용한다. 모터 상태를 함께 기록하려면 다른 터미널에서 같은 실험 이름으로 `g1 monitor record`를 실행하면 `state/`에 저장된다.
+실험 디렉터리 `/workspace/runs/stairs-01/`의 `depth/`에 깊이, `state/`에 상태, `geometry/`에 계산 결과가 저장된다.
 
-광학 좌표를 **앞·왼쪽·위** 기준 좌표로 바꾸는 실측 회전·이동이 필요하다. [보정 JSON](config/calibration.example.json)은 필드 형식 예시다. `source_frame`은 해당 깊이 기록의 `frame_id`와 맞춰야 한다. 기체 자세·센서 장착이 바뀌면 이전 보정값을 재사용하지 않는다. 실측 JSON이 아직 컨테이너에 없으면 아래 블록을 실행한 뒤 JSON을 붙여넣고 새 줄에서 Ctrl+D를 누른다. 실험별 새 파일에만 저장한다.
+광학 좌표를 **앞·왼쪽·위** 기준으로 바꾸려면 실측 회전·이동이 필요하다. `source_frame`은 깊이 기록의 `frame_id`와 맞아야 한다. 기체 자세나 센서 장착이 바뀌면 다시 보정한다. 실측 JSON을 입력하려면 다음 명령을 실행하고 JSON을 붙여넣은 뒤 새 줄에서 Ctrl+D를 누른다. 컨테이너 안에서 유효성을 확인하고 새 파일에 저장한다. [보정 JSON 형식](config/calibration.example.json)
 
 ```bash
-CAL="/workspace/runs/$RUN_ID/measured-calibration.json"
 docker exec -i jsj-g1-tools python3 -c '
 import json, sys
 from g1stairs.geometry.projection import Calibration
@@ -105,15 +150,15 @@ data = json.load(sys.stdin)
 Calibration.from_mapping(data)
 with open(sys.argv[1], "x") as f:
     json.dump(data, f)
-' "$CAL"
+' /workspace/runs/stairs-01/measured-calibration.json
 ```
 
 ```bash
-docker exec jsj-g1-tools g1 stairs measure --run "$RUN_ID" --calibration "$CAL"
-docker exec jsj-g1-tools head -n 1 "/workspace/runs/$RUN_ID/geometry/stairs.jsonl"
+docker exec jsj-g1-tools g1 stairs measure --run stairs-01 --calibration /workspace/runs/stairs-01/measured-calibration.json
+docker exec jsj-g1-tools head -n 1 /workspace/runs/stairs-01/geometry/stairs.jsonl
 ```
 
-기록 당시 `--calibration`을 제공했으면 측정 단계의 `--calibration "$CAL"`을 생략할 수 있다. 기본은 첫 프레임이며 전체는 `--all-frames`다. 결과의 `riser_height_m`, `tread_depth_m`, `width_m`는 미터 단위 추정치다. 양쪽 경계가 보이지 않아 전체 폭을 결정할 수 없으면 `width_m`은 `null`이다. 디딤 가능 여부와 보행 명령은 이 출력에 포함되지 않는다.
+기록 때 `--calibration`을 제공했다면 측정 단계에서 보정 인자를 생략할 수 있다. 기본은 첫 프레임이며 전체는 `--all-frames`다. `riser_height_m`, `tread_depth_m`, `width_m`는 미터 단위다. 양쪽 경계가 보이지 않아 폭을 결정할 수 없으면 `width_m`은 `null`이다.
 
 <a id="sdk"></a>
 
@@ -122,7 +167,7 @@ docker exec jsj-g1-tools head -n 1 "/workspace/runs/$RUN_ID/geometry/stairs.json
 | 디렉터리 | 역할과 사용 API |
 | --- | --- |
 | [src/g1_health_monitor](src/g1_health_monitor/) | 동작 확인된 연구실 C++ 원본. Unitree SDK2의 `ChannelSubscriber`, `LowState_`, `BmsState_`로 상태 수신. 이 폴더의 README는 원본 자료이며 PC2 실행은 이 페이지를 따른다. [공식 C++ SDK](https://github.com/unitreerobotics/unitree_sdk2/tree/aaf69cb56c9d5ed63d8b284008ec3a8ab999bec1) |
-| [src/g1_teleop](src/g1_teleop/) | 공식 Python `LocoClient`의 `GetFsmId`, `SetFsmId`, `SetBalanceMode`, `SetVelocity`를 호출하는 키보드 입력기. [공식 Python SDK](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/unitree_sdk2py/g1/loco/g1_loco_client.py) |
+| [src/g1_teleop](src/g1_teleop/) | 공식 Python `LocoClient`의 `GetFsmId`, `SetFsmId`, `SetBalanceMode`, `SetVelocity`, `SetSpeedMode`를 호출하는 키보드 입력기. [공식 Python SDK](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/unitree_sdk2py/g1/loco/g1_loco_client.py) |
 | [src/g1stairs/monitoring](src/g1stairs/monitoring/) | Unitree SDK2 Python 상태 구독, 기록, 웹 대시보드 |
 | [src/g1stairs/camera](src/g1stairs/camera/) | USB는 RealSense SDK 2.0(`pyrealsense2`), ROS 영상은 Foxy `rclpy`와 `sensor_msgs`, DDS 진단은 Eclipse Cyclone DDS. [Unitree 카메라 가이드](https://support.unitree.com/home/en/G1_developer/depth_camera_instruction) · [ROS 2 CameraInfo](https://github.com/ros2/common_interfaces/blob/foxy/sensor_msgs/msg/CameraInfo.msg) |
 | [src/g1stairs/geometry](src/g1stairs/geometry/) | 공식 RealSense SDK의 역투영으로 미터 단위 3D 좌표를 구한 뒤, 프로젝트 알고리즘이 수평면과 관측된 경계를 찾아 계단 치수를 계산한다. [RealSense 좌표 변환](https://github.com/realsenseai/librealsense/wiki/Projection-in-RealSense-SDK-2.0) |
@@ -140,4 +185,18 @@ docker exec jsj-g1-tools python3 -m unittest discover -s /opt/g1-tools -t /opt/g
 
 ## 종료와 기존 데이터
 
-각 도구는 실행한 터미널에서 종료한다. 동작 중인 텔레옵을 종료하고 기록이 끝났는지 확인한 후 `docker stop jsj-g1-tools`로 컨테이너를 정지한다. 다시 시작하면 같은 쓰기 레이어의 `/workspace/runs`가 유지된다. 컨테이너를 삭제하면 이 데이터도 삭제된다. 이전 기능별 컨테이너의 기록은 [기존 실험 가져오기](docs/previous-runs.md)를 따른다.
+기존 컨테이너를 재개하기 전에 이름·이미지·역할을 확인한다. 본인이 만든 `jsj-g1-tools:foxy`, 역할 `operator-tools`인 컨테이너에서 이어간다.
+
+```bash
+docker container inspect --format '{{.Name}} {{.Config.Image}} {{index .Config.Labels "org.iic.g1.role"}} {{.State.Status}}' jsj-g1-tools
+docker start jsj-g1-tools
+docker exec jsj-g1-tools ls /workspace/runs
+```
+
+실험을 마치면 각 터미널에서 텔레옵과 녹화를 끝낸 뒤 통합 컨테이너를 중지한다.
+
+```bash
+docker stop jsj-g1-tools
+```
+
+같은 컨테이너를 다시 시작하면 쓰기 레이어의 기록이 유지된다. **새 이미지나 변경된 USB 장치 경로로 다시 생성할 때**는 기존 컨테이너를 보관하고 새 컨테이너로 필요한 기록을 가져온다. 이전 기능별 컨테이너에 남은 기록도 이 절차로 가져올 수 있다. [기존 실험 보관·가져오기](docs/previous-runs.md)

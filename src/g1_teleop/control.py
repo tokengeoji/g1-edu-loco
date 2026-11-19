@@ -16,7 +16,8 @@ VELOCITY = {
 # integer or a repeated key as an FSM command.
 MODES = {
     "1": ("fsm", 4, "잠금 기립 · 균형 제어 없음 · 기체 지지 확인"),
-    "2": ("fsm", 500, "기본 보행"),
+    "2": ("fsm", 802, "이 기체의 이동 모드 · FSM 802"),
+    "m": ("fsm", 500, "일반 보행 · Regular/Walk Motion · FSM 500"),
     "3": ("fsm", 2, "위치 제어 쪼그림 · 균형 제어 없음 · 기체 지지 확인"),
     "4": ("balance", 0, "균형 기립 · 정지·안정 시 제자리걸음 해제"),
     "5": ("balance", 1, "연속 제자리걸음 · 속도 0에서도 발 디딤"),
@@ -28,6 +29,12 @@ MODES = {
 }
 
 
+# Unitree SetSpeedMode selects a running-mode upper limit, independent of the
+# velocities in individual SetVelocity requests. No speed setting is sent at startup.
+SPEED_LIMITS = {"!": (0, 1.0), "@": (1, 2.0), "#": (2, 2.7), "$": (3, 3.0)}
+GAIT_IDS = (802, 501)
+
+
 class Controller:
     """Dispatch one fresh key at a time. Merely constructing this class sends nothing."""
 
@@ -35,13 +42,13 @@ class Controller:
         self.client = client
         self.waist_3dof = waist_3dof
         self.clock = clock
-        self.armed = False
         self.speed_scale = 1.0
         self._moving_key = None
         self._motion_deadline = 0.0
         self._pending = None
         self._confirm_deadline = 0.0
         self._awaiting_fsm = None
+        self._regular_walk_selected = False
 
     @staticmethod
     def _check(operation, code):
@@ -53,6 +60,12 @@ class Controller:
         self._check("GetFsmId", code)
         if type(value) is not int or value < 0:
             raise RuntimeError(f"GetFsmId 응답에 유효한 ID가 없습니다: {value!r}")
+        # While entering 500 the robot may still report its previous mode.
+        # Once 500 is verified, any observed departure cancels that selection.
+        if value != 500 and self._awaiting_fsm != 500:
+            self._regular_walk_selected = False
+        if value == self._awaiting_fsm:
+            self._awaiting_fsm = None
         return value
 
     def _stop(self, force=False):
@@ -61,64 +74,69 @@ class Controller:
         self._moving_key = None
 
     def _fault(self, error):
-        self.armed = False
-        self._pending = self._awaiting_fsm = None
+        self._pending = None
         try:
             self._stop()
         except Exception as stop_error:
             self._moving_key = None
             return f"RPC 오류: {error}. 속도 0 응답도 확인하지 못했습니다: {stop_error}. 조종기를 확인하세요."
-        return f"RPC 오류: {error}. 키보드 제어를 해제했습니다. 상태를 확인하고 r로 재개하세요."
-
-    def _walk_mode(self, current):
-        if current not in (500, 501):
-            return f"현재 FSM={current}. 보행 모드 500/501에서만 이동과 보행 설정을 적용합니다."
-        if current == 501 and not self.waist_3dof:
-            return "FSM 501입니다. 허리 3자유도 모델 확인 후 --waist-3dof로 실행하세요."
-        return None
+        return f"RPC 오류: {error}. 직전 명령을 중단했습니다. 다음 입력에서 기체 상태를 다시 확인합니다."
 
     def _status(self, current):
-        if self._awaiting_fsm == current:
-            self._awaiting_fsm = None
-        text = f"현재 FSM={current} · 키보드 {'활성' if self.armed else '비활성'} · 속도 {self.speed_scale:g}배"
+        text = f"현재 FSM={current} · 속도 {self.speed_scale:g}배"
+        if current == 500:
+            text += " · 일반 보행 선택됨" if self._regular_walk_selected else " · 일반 보행 선택: m → Enter"
         if self._awaiting_fsm is not None:
             text += f" · 요청한 FSM {self._awaiting_fsm} 진입 미확인"
         return text
 
+    def _check_mode(self, current, allowed_modes, hint):
+        if self._awaiting_fsm is not None:
+            return self._status(current)
+        if current == 501 and not self.waist_3dof:
+            return "FSM 501입니다. 허리 3자유도 모델 확인 후 --waist-3dof로 실행하세요."
+        if current not in allowed_modes:
+            return f"현재 FSM={current}. {hint}"
+        return None
+
     def _confirm(self, selected):
         kind, value, label = MODES[selected]
+        if kind == "fsm":
+            self._regular_walk_selected = False
         current = self._fsm()
         if current == 1000:
-            self.armed = False
-            return "FSM 1000(사용자 제어)입니다. 키보드 제어를 해제했습니다."
+            return "FSM 1000(사용자 제어)입니다. 내장 보행기 명령을 전송하지 않았습니다."
         if kind == "balance":
-            blocked = self._walk_mode(current)
-            if current == self._awaiting_fsm:
-                self._awaiting_fsm = None
-            if blocked or self._awaiting_fsm is not None:
-                return blocked or self._status(current)
+            blocked = self._check_mode(current, (500, 501), "제자리걸음 설정은 Walk Motion(500/501)에서 사용하세요.")
+            if blocked:
+                return blocked
             self._check("SetBalanceMode", self.client.SetBalanceMode(value))
             return f"보행 설정 요청 수락: {label} (SetBalanceMode={value}). 실제 발 디딤을 확인하세요."
 
-        self._check("SetFsmId", self.client.SetFsmId(value))
-        if value == 706:
-            # 706 is a posture toggle. Do not poll until 706 or repeat a request
-            # when its terminal state is not 706.
-            self.armed = False
+        if value == 500 and current == 500:
+            self._regular_walk_selected = True
             self._awaiting_fsm = None
-            return f"{label} 요청 수락. 자세가 안정되면 f로 조회하고 r로 재개하세요."
+            return self._status(current)
+        if value in GAIT_IDS and current == value and self._awaiting_fsm is None:
+            return self._status(current)
+        # Remember the request even when its acknowledgment is lost.
         self._awaiting_fsm = value
+        self._check("SetFsmId", self.client.SetFsmId(value))
+        self._regular_walk_selected = value == 500
+        if value == 706:
+            # This is a toggle, so never retry it automatically. Re-select a
+            # gait after the robot settles if the transient ID was not observed.
+            return f"{label} 요청 수락. 자세를 확인하고 이동할 보행 모드를 선택하세요."
         return f"FSM {value} 요청 수락 · {self._status(self._fsm())}"
 
     def _move(self, key):
         deadline = self.clock() + PULSE_SECONDS
         current = self._fsm()
-        if self._awaiting_fsm == current:
-            self._awaiting_fsm = None
-        blocked = self._walk_mode(current)
-        if blocked or self._awaiting_fsm is not None:
+        allowed = (*GAIT_IDS, 500) if self._regular_walk_selected else GAIT_IDS
+        blocked = self._check_mode(current, allowed, "기본 보행 802는 2 → Enter, 일반 보행 500은 m → Enter로 선택하세요.")
+        if blocked:
             self._stop()
-            return blocked or self._status(current)
+            return blocked
         duration = deadline - self.clock()
         if duration <= 0:
             self._stop()
@@ -134,11 +152,11 @@ class Controller:
         return None
 
     def handle(self, key):
-        """Return an operator message or None. RPC failures disarm the controller."""
+        """Return an operator message or None. On RPC failure, discard motion and wait for a fresh input."""
         try:
             if key in ("\r", "\n"):
                 selected, self._pending = self._pending, None
-                if selected is None or not self.armed:
+                if selected is None:
                     return None
                 if self.clock() >= self._confirm_deadline:
                     return "모드 선택 시간이 지났습니다."
@@ -150,28 +168,26 @@ class Controller:
             if key == " ":
                 self._stop(force=True)
                 return "속도 0 요청 수락."
-            if key in ("x", "g"):
+            if key == "x":
                 return self.close()
             if key == "f":
                 return self._status(self._fsm())
-            if key == "r":
-                self._stop()
-                state = self._fsm()
-                if state == 1000:
-                    self.armed = False
-                    return "FSM 1000(사용자 제어)입니다. 내장 제어 모드를 확인하세요."
-                self.armed = True
-                return self._status(state)
             if previous is not None and key not in MODES:
                 return "모드 선택을 취소했습니다."
             if key in ("+", "-", "="):
                 delta = -0.25 if key == "-" else 0.25
                 self.speed_scale = max(0.5, min(2.0, self.speed_scale + delta))
                 return f"속도 {self.speed_scale:g}배 · 다음 이동 입력부터 적용합니다."
+            if key in SPEED_LIMITS:
+                current = self._fsm()
+                blocked = self._check_mode(current, (802,), "달리기 속도 상한은 FSM 802에서 설정하세요.")
+                if blocked:
+                    return blocked
+                mode, limit = SPEED_LIMITS[key]
+                self._check("SetSpeedMode", self.client.SetSpeedMode(mode))
+                return f"SetSpeedMode({mode}) 수락 · 달리기 속도 상한 {limit:.1f} m/s."
             if key not in VELOCITY and key not in MODES:
                 return None
-            if not self.armed:
-                return "키보드 제어가 꺼져 있습니다. r로 현재 상태를 확인하고 활성화하세요."
             if key in MODES:
                 self._stop()
                 if key == "8" and not self.waist_3dof:
@@ -198,10 +214,10 @@ class Controller:
         return None
 
     def close(self):
-        self.armed = False
         self._pending = self._awaiting_fsm = None
+        self._regular_walk_selected = False
         try:
             self._stop()
         except Exception as error:
             return self._fault(error)
-        return "키보드 제어를 해제했습니다."
+        return "텔레옵을 종료했습니다."

@@ -4,10 +4,16 @@ PC2의 `jsj-g1-tools` 컨테이너에서 Unitree Python SDK2로 `rt/lowstate`를
 
 ## 원본 C++ 온도·배터리 모니터
 
+PC2의 SSH 터미널에서 아래 명령으로 네트워크 인터페이스를 확인한다.
+
 ```bash
-docker exec jsj-g1-tools ip -br -4 addr
-read -rp '로봇 네트워크 NIC: ' G1_IFACE
-docker exec -it jsj-g1-tools g1 health "$G1_IFACE"
+docker exec jsj-g1-tools g1 interfaces
+```
+
+이 문서의 `eth0`는 예시다. 아래 명령에서 `eth0`를 기존 온도 모니터로 로봇 데이터를 수신한 유선 인터페이스 이름으로 바꾼다.
+
+```bash
+docker exec -it jsj-g1-tools g1 health eth0
 ```
 
 C++ 프로그램은 도메인 0에서 `ChannelSubscriber<LowState_>`와 `ChannelSubscriber<BmsState_>`를 생성해 모터 온도와 BMS 상태를 수신한다. 경보 기준과 출력 항목은 [원본 모니터 설명](../../g1_health_monitor/)에서 확인할 수 있다.
@@ -17,16 +23,14 @@ C++ 프로그램은 도메인 0에서 `ChannelSubscriber<LowState_>`와 `Channel
 아래 명령은 PC2의 루프백에서 웹 서버를 연다. 외부 브라우저에서 직접 열 때는 `--bind`에 관측용 PC가 접근할 수 있는 PC2의 LAN 주소를 입력한다. `--nic`은 로봇 DDS에 연결할 NIC를 지정한다.
 
 ```bash
-read -rp '로봇 네트워크 NIC: ' G1_IFACE
-docker exec -it jsj-g1-tools g1 monitor serve --nic "$G1_IFACE" --domain 0 --bind 127.0.0.1
+docker exec -it jsj-g1-tools g1 monitor serve --nic eth0 --domain 0 --bind 127.0.0.1
 ```
 
-PC2 브라우저에서 `http://127.0.0.1:8765/`를 연다. `waiting`은 웹 서버가 첫 DDS 샘플을 기다린다는 뜻이다. 별도 터미널에서도 같은 NIC를 지정해 샘플 한 건 또는 10초 기록을 얻을 수 있다. 카메라와 같은 실험 이름을 사용하면 `/workspace/runs/<실험 이름>/state/`와 `depth/`에 같은 실험의 관측이 모인다.
+PC2 브라우저에서 `http://127.0.0.1:8765/`를 연다. `waiting`은 웹 서버가 첫 DDS 샘플을 기다린다는 뜻이다. 별도 터미널에서 같은 NIC로 샘플 한 건을 확인하거나 10초 동안 기록할 수 있다. `stairs-01`을 이번 실험 이름으로 바꾼다. 카메라 기록에도 같은 이름을 쓰면 컨테이너의 `/workspace/runs/<실험 이름>/` 아래에 상태는 `state/`, 깊이 영상은 `depth/`에 저장된다.
 
 ```bash
-read -rp '로봇 네트워크 NIC: ' G1_IFACE
-docker exec jsj-g1-tools g1 monitor probe --nic "$G1_IFACE" --domain 0
-docker exec jsj-g1-tools g1 monitor record --nic "$G1_IFACE" --domain 0 --run stairs-01 --seconds 10
+docker exec jsj-g1-tools g1 monitor probe --nic eth0 --domain 0
+docker exec jsj-g1-tools g1 monitor record --nic eth0 --domain 0 --run stairs-01 --seconds 10
 docker exec jsj-g1-tools g1 monitor inspect --run stairs-01
 ```
 

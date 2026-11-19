@@ -32,13 +32,14 @@ COPY src/g1_teleop/ ./g1_teleop/
 COPY src/g1stairs/ ./g1stairs/
 COPY config/ ./config/
 COPY docker/tools/g1 /usr/local/bin/g1
+COPY docker/tools/pc2.sh /usr/local/bin/g1-pc2-create-command
 
 ENV BASH_ENV=/opt/g1/ros_env.sh \
     LIBGL_ALWAYS_SOFTWARE=1 QT_X11_NO_MITSHM=1 \
     PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     PYTHONPATH=/opt/g1-tools:${PYTHONPATH}
-RUN set -e; chmod 0755 /usr/local/bin/g1; mkdir -p /run/g1-tools /workspace/runs; \
-    bash -n /usr/local/bin/g1; bash -n g1stairs/camera/resources/rviz-web.sh; \
+RUN set -e; chmod 0755 /usr/local/bin/g1 /usr/local/bin/g1-pc2-create-command; mkdir -p /run/g1-tools /workspace/runs; \
+    bash -n /usr/local/bin/g1; bash -n /usr/local/bin/g1-pc2-create-command; bash -n g1stairs/camera/resources/rviz-web.sh; \
     test -s g1stairs/camera/resources/image.rviz; test -s /usr/share/novnc/vnc.html; \
     for tool in rviz2 Xvfb xvfb-run xauth xwininfo x11vnc websockify; do command -v "$tool" >/dev/null; done; \
     python3 -c 'from importlib.metadata import version; from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient; assert version("pyrealsense2") == "2.54.1.5217"'; \

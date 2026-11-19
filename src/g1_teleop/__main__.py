@@ -15,20 +15,22 @@ from contextlib import contextmanager, nullcontext
 from .control import Controller, MODES
 
 
-HELP = """r 제어 활성화    g 제어 해제    f 현재 FSM    ? 키 안내    x 종료
+HELP = """f 현재 FSM    ? 키 안내    x 종료
 w/s 전진·후진    a/d 왼쪽·오른쪽 이동    q/e 좌회전·우회전
-↑/↓ 전진·후진    ←/→ 좌회전·우회전    +/- 속도 조절
-Space 속도 0    숫자 선택 후 별도로 Enter 확인    Esc 선택 취소
+↑/↓ 전진·후진    ←/→ 좌회전·우회전    +/- 이동 속도 배율
+!/@/#/$ (Shift+1/2/3/4) FSM 802 속도 상한 단계 0/1/2/3
+Space 속도 0    모드 키를 누른 뒤 Enter로 요청    Esc 선택 취소
 %s
 이동 키는 0.25초 동안 적용됩니다. 연속 이동은 키를 반복 입력하세요.
-Space는 이동 속도를 0으로 요청합니다. 연속 제자리걸음 해제는 4, Enter입니다.""" % "\n".join(
+Space는 이동 속도를 0으로 요청합니다.
+FSM 802에서는 내장 보행기가 팔을 흔들 수 있습니다. 키보드에서 팔 자세 명령을 보내지 않습니다.""" % "\n".join(
     f"  {key}  {mode[2]}" for key, mode in MODES.items()
 )
 
 
 class DryClient:
     def __init__(self):
-        self.fsm = 4
+        self.fsm = 802
 
     def GetFsmId(self):
         return 0, self.fsm
@@ -41,6 +43,10 @@ class DryClient:
 
     def SetBalanceMode(self, value):
         print(f"[모의] SetBalanceMode({value})", flush=True)
+        return 0
+
+    def SetSpeedMode(self, value):
+        print(f"[모의] SetSpeedMode({value})", flush=True)
         return 0
 
     def SetVelocity(self, vx, vy, yaw, duration):
@@ -114,7 +120,7 @@ def live_session_lock():
 class TerminalKeys:
     """Accept one fresh key or standard arrow. Consume reports and pasted text."""
 
-    commands = b"wasdqergfx?+-0123456789 \r\n\x03\x04"
+    commands = b"wasdqefx?+-=!@#$ \r\n\x03\x04" + "".join(MODES).encode("ascii")
     arrows = {ord("A"): "w", ord("B"): "s", ord("C"): "e", ord("D"): "q"}
 
     def __init__(self):
@@ -132,8 +138,6 @@ class TerminalKeys:
             # blocked. Never replay movement or mode changes from that buffer.
             if any(byte in b"x\x03\x04" for byte in data):
                 return "x"
-            if b"g" in data:
-                return "g"
             return " " if b" " in data else "\x1b"
         now = time.monotonic()
         if self.state == "esc" and len(data) == 1 and data[0] in self.commands:
@@ -237,9 +241,7 @@ def poll_queued(fd, keys):
         if key == "x":
             return "x"
         keys.clean_arrow = False  # A queued arrow prefix must stay stale.
-        if key == "g":
-            priority = "g"
-        elif key == " " and priority != "g":
+        if key == " ":
             priority = " "
         elif not priority:
             priority = "\x1b"
@@ -257,7 +259,7 @@ def interact(controller):
     with keyboard_terminal(fd):
         try:
             show(HELP)
-            show("준비 · f 상태 조회, r 활성화")
+            show("준비 · 방향키로 이동, f로 현재 모드 조회")
             pending = None
             while True:
                 if pending is None:
@@ -313,7 +315,7 @@ def main(argv=None):
                     return 0
             else:
                 client = DryClient()
-                show("오프라인 모의 제어 · 초기 FSM=4")
+                show(f"오프라인 모의 제어 · 초기 FSM={client.fsm}")
             interact(Controller(client, waist_3dof=args.waist_3dof))
     except EndSession:
         return 0

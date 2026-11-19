@@ -22,8 +22,10 @@ from . import __main__ as cli
 class KeyboardInputTests(unittest.TestCase):
     def test_single_commands_and_complete_arrows(self):
         keys = cli.TerminalKeys()
-        for key in "wasdqergfx?+-0123456789 \r\n":
+        for key in "wasdqefx?+-=!@#$0123456789m \r\n":
             self.assertEqual(keys.read(key.encode()), key)
+        for unused_key in b"rg":
+            self.assertEqual(keys.read(bytes([unused_key])), "\x1b")
         for seq, key in [(b"\x1b[A", "w"), (b"\x1bOB", "s"),
                          (b"\x1b[D", "q"), (b"\x1bOC", "e")]:
             self.assertEqual(keys.read(seq), key)
@@ -32,7 +34,7 @@ class KeyboardInputTests(unittest.TestCase):
 
     def test_ambiguous_bursts_and_reports_do_not_move_or_change_modes(self):
         keys = cli.TerminalKeys()
-        for seq in [b"ww", b"2\r", b"\x1b[Aw", b"w\x1b[A", b"\x1b[1;5D",
+        for seq in [b"ww", b"2\r", b"m\r", b"\x1b[Aw", b"w\x1b[A", b"\x1b[1;5D",
                     b"\x1bw", b"\x1b[I", b"\x1b[O", b"\x1b[", b"3", b"~",
                     b"\x1b]report", b"w", b"\x07", b"\x1b[M", b"w", b"r", b"d"]:
             self.assertEqual(keys.read(seq), "\x1b", seq)
@@ -46,10 +48,9 @@ class KeyboardInputTests(unittest.TestCase):
         for seq in [b"\x03", b"\x04", b""]:
             self.assertEqual(keys.read(seq), "x")
 
-    def test_stale_direction_cannot_swallow_stop_disarm_or_exit(self):
+    def test_stale_direction_cannot_swallow_stop_or_exit(self):
         keys = cli.TerminalKeys()
         self.assertEqual(keys.read(b"s "), " ")
-        self.assertEqual(keys.read(b"gw"), "g")
         self.assertEqual(keys.read(b"sx"), "x")
 
 
@@ -164,34 +165,63 @@ class TerminalLoopTests(unittest.TestCase):
             if not select.select([self.master], [], [], max(0, deadline - time.monotonic()))[0]:
                 self.fail(f"Missing {text!r} in {self.output.decode(errors='replace')!r}")
             self.output += os.read(self.master, 8192)
-        self.output = self.output.split(target, 1)[1]
-
-    def enter_walk(self):
-        os.write(self.master, b"r")
-        self.await_output("키보드 활성")
-        os.write(self.master, b"2")
-        self.await_output("Esc")
-        os.write(self.master, b"\r")
-        self.await_output("FSM=500")
+        before, _, self.output = self.output.partition(target)
+        return before + target
 
     def assert_restored(self):
         self.assertEqual(self.proc.wait(timeout=3), 0)
         self.assertEqual(termios.tcgetattr(self.slave), self.original)
 
-    def test_move_with_arrow_then_idle_stop_then_eof_restores_terminal(self):
+    def test_first_arrow_moves_in_802_then_idle_stop_and_eof_restore_terminal(self):
         self.start()
-        self.enter_walk()
         os.write(self.master, b"\x1b[A")
         self.await_output("SetVelocity(0.15, 0.0, 0.0, ")
         self.await_output("SetVelocity(0.0, 0.0, 0.0, ")
         os.write(self.master, b"\x04")
         self.assert_restored()
 
+    def test_mode_request_and_speed_cap_are_separate_from_motion(self):
+        self.start(f"""
+from {__package__} import __main__ as cli
+class LockedStand(cli.DryClient):
+    def __init__(self):
+        self.fsm = 4
+cli.DryClient = LockedStand
+raise SystemExit(cli.main())
+""")
+        os.write(self.master, b"2")
+        self.await_output("Esc")
+        os.write(self.master, b"\r")
+        self.await_output("FSM=802")
+        os.write(self.master, b"@")
+        # The mock prints during the RPC. Only the acceptance message follows
+        # the stale-input drain and marks the next keystroke as fresh.
+        transcript = self.await_output("SetSpeedMode(1) 수락")
+        self.assertIn(b"SetSpeedMode(1)", transcript)
+        self.assertNotIn(b"SetVelocity(", transcript)
+        os.write(self.master, b"w")
+        self.await_output("SetVelocity(0.15, 0.0, 0.0, ")
+        os.write(self.master, b"x")
+        self.assert_restored()
+
+    def test_explicit_regular_and_run_switches_and_status_readback(self):
+        self.start()
+        for key, target in [(b"m", 500), (b"2", 802)]:
+            with self.subTest(target=target):
+                os.write(self.master, key)
+                self.await_output("Enter로 요청, Esc로 취소")
+                os.write(self.master, b"\r")
+                self.await_output(f"[모의] SetFsmId({target})")
+                self.await_output(f"현재 FSM={target}")
+                os.write(self.master, b"f")
+                self.await_output(f"현재 FSM={target}")
+        os.write(self.master, b"x")
+        self.assert_restored()
+
     def test_signal_stops_owned_motion_and_restores_terminal(self):
         for sig in [signal.SIGHUP, signal.SIGINT, signal.SIGTERM]:
             with self.subTest(signal=sig):
                 self.start()
-                self.enter_walk()
                 os.write(self.master, b"w")
                 self.await_output("SetVelocity(0.15, 0.0, 0.0, ")
                 self.proc.send_signal(sig)
@@ -212,7 +242,6 @@ def slow(self, vx, vy, yaw, duration):
 cli.DryClient.SetVelocity = slow
 sys.exit(cli.main())
 """)
-        self.enter_walk()
         os.write(self.master, b"w")
         self.await_output("in RPC")
         os.write(self.master, b"s")
