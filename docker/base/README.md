@@ -69,6 +69,47 @@ docker run --rm --name jsj-base-check --pull never --network none \
 
 마지막 오류의 **서버 이름과 빌드 단계**를 확인하세요. R35.3.1 예시의 부모 이미지와 이 저장소는 공개되어 있습니다. 다른 L4T에서 직접 입력한 부모 이미지의 접근 권한은 해당 배포처가 정합니다. [부모 이미지 태그](https://hub.docker.com/r/dustynv/ros/tags)
 
+<a id="layer-retry"></a>
+
+### 레이어를 받던 중 `unauthorized: authentication required`로 끝난 경우
+
+`Pulling from dustynv/ros`, `Pull complete`, `Downloading`이 차례로 나온 뒤 중단됐다면 부모 이미지 다운로드 단계에서 멈춘 것입니다. R35.3.1 예제의 경우 **PC2 터미널**에서 같은 태그로 한 번 다시 받으세요.
+
+```bash
+docker pull --platform linux/arm64 dustynv/ros:foxy-ros-base-l4t-r35.3.1
+```
+
+`Status: Downloaded newer image` 또는 `Status: Image is up to date`가 나오면 [1단계 빌드 블록](#build)을 다시 실행하세요. Docker는 로컬에 남은 레이어를 재사용합니다. 중단됐던 레이어는 처음부터 다시 받을 수 있습니다. [Docker 이미지 다운로드](https://docs.docker.com/reference/cli/docker/image/pull/)
+
+**같은 오류가 반복되면** PC2에서 아래 명령으로 Docker Engine 버전과 실패 직후의 데몬 로그를 확인하세요. 오류를 공유할 때는 시각·서버 이름·메시지만 남기고 URL의 쿼리 문자열과 토큰은 가리세요. [Docker 데몬 로그 확인](https://docs.docker.com/engine/daemon/logs/)
+
+```bash
+docker version --format 'Engine {{.Server.Version}}'
+journalctl -u docker.service --since '10 minutes ago' --no-pager -n 40
+```
+
+<details>
+<summary>G1에서만 계속 실패하고 외부 PC에서는 같은 이미지를 받을 수 있을 때</summary>
+
+Docker가 있는 **외부 PC의 Bash 터미널**에서 실행하세요. 평소 사용하는 PC2 접속 대상을 입력하면 이미지가 Docker 저장소 사이에서 전송됩니다. 두 호스트에 중간 tar 파일을 만들지 않습니다. 이 절차는 부모 이미지 전송까지만 수행합니다.
+
+```bash
+(
+  set -euo pipefail
+  image='dustynv/ros:foxy-ros-base-l4t-r35.3.1'
+  read -rp 'PC2 접속 대상 (평소 사용하는 계정@주소 또는 SSH 별칭): ' pc2
+  [[ -n "$pc2" && "$pc2" != -* ]] || exit 1
+  docker pull --platform linux/arm64 "$image"
+  docker image save "$image" | ssh -T "$pc2" docker image load
+)
+```
+
+`Loaded image: dustynv/ros:foxy-ros-base-l4t-r35.3.1`가 나오면 **PC2 터미널**에서 [1단계 빌드 블록](#build)을 다시 실행하세요. [Docker save](https://docs.docker.com/reference/cli/docker/image/save/) · [Docker load](https://docs.docker.com/reference/cli/docker/image/load/)
+
+</details>
+
+### 다른 단계에서 생긴 오류
+
 | 마지막 오류가 난 곳 | 확인할 내용 |
 | --- | --- |
 | `[1/2]`의 `docker pull` 또는 `[2/2]`의 `load metadata for`, `auth.docker.io`, `registry-1.docker.io` | 로그의 이미지 이름·태그와 위에서 선택한 부모 이미지를 대조하세요. `[auth] … DONE`은 자동으로 pull 토큰을 받은 표시입니다. 마지막 줄이 `401 Unauthorized`라면 실제로 거절된 레지스트리 호스트와 오류 줄을 확인하세요. |
