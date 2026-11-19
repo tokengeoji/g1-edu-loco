@@ -48,10 +48,12 @@ def _measure(args):
     if "frame_id" not in calibration_json and "target_frame" in calibration_json:
         calibration_json["frame_id"] = calibration_json["target_frame"]
     calibration = Calibration.from_mapping(calibration_json)
-    rays = camera_rays(
-        depth_manifest["intrinsics"],
-        use_realsense_sdk=depth_manifest["source"] in ("realsense", "realsense_ros2"),
-    )
+    input_frame = depth_manifest.get("frame_id")
+    if "source_frame" in calibration_json:
+        source_frame = calibration_json["source_frame"]
+        if not isinstance(source_frame, str) or not source_frame.strip() or source_frame != input_frame:
+            raise ValueError(f"calibration source_frame {source_frame!r} does not match depth frame {input_frame!r}")
+    rays = camera_rays(depth_manifest["intrinsics"])
     scale = float(depth_manifest["depth_scale_m"])
     options = MeasurementOptions(args.grid_m, args.height_tolerance_m, args.min_samples)
     metadata = {
@@ -59,7 +61,10 @@ def _measure(args):
         "clock_domain": depth_manifest["clock_domain"],
         "frame_id": calibration.frame_id,
         "coordinate_axes": {"x": "forward", "y": "left", "z": "up"},
-        "input_frame_id": depth_manifest.get("frame_id"),
+        "input_frame_id": input_frame,
+        "calibration_source_frame_check": "matched" if "source_frame" in calibration_json else "unspecified",
+        "deprojection": "librealsense.rs2_deproject_pixel_to_point",
+        "surface_estimation": "project_horizontal_surfaces",
         "calibration": calibration_json,
         "calibration_scope": "fixed_pose_per_run",
         "units": {"distance": "m", "host_rx_monotonic_ns": "ns"},

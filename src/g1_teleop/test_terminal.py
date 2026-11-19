@@ -9,6 +9,7 @@ import select
 import signal
 import subprocess
 import sys
+import tempfile
 import termios
 import time
 import unittest
@@ -44,6 +45,12 @@ class KeyboardInputTests(unittest.TestCase):
         self.assertEqual(keys.read(b"w"), "w")
         for seq in [b"\x03", b"\x04", b""]:
             self.assertEqual(keys.read(seq), "x")
+
+    def test_stale_direction_cannot_swallow_stop_disarm_or_exit(self):
+        keys = cli.TerminalKeys()
+        self.assertEqual(keys.read(b"s "), " ")
+        self.assertEqual(keys.read(b"gw"), "g")
+        self.assertEqual(keys.read(b"sx"), "x")
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -93,6 +100,38 @@ class DiscoveryTests(unittest.TestCase):
                 self.assertEqual(cli.main(["--status", "--interface", "eth0", "--domain", "7"]), 1)
         self.assertIn("NIC=eth0 · DDS domain=7 · service=auto · sport GetFsmId code=3104",
                       errors.getvalue())
+
+
+class LiveLockTests(unittest.TestCase):
+    def test_second_live_session_is_rejected_before_dds_and_crash_releases_lock(self):
+        holder = """
+import fcntl, sys
+with open(sys.argv[1], "a") as stream:
+    fcntl.flock(stream, fcntl.LOCK_EX)
+    print("locked", flush=True)
+    sys.stdin.read()
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "teleop.lock")
+            with subprocess.Popen([sys.executable, "-c", holder, path],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE) as proc:
+                try:
+                    self.assertTrue(select.select([proc.stdout], [], [], 5)[0])
+                    self.assertEqual(proc.stdout.readline(), b"locked\n")
+                    with patch.object(cli, "LIVE_LOCK", path), patch.object(cli, "connect") as connect:
+                        with patch.object(sys.stdin, "isatty", return_value=True), \
+                                patch.object(sys.stdout, "isatty", return_value=True), \
+                                contextlib.redirect_stderr(io.StringIO()) as errors:
+                            self.assertEqual(cli.main(["--live", "--interface", "lo"]), 1)
+                        self.assertIn("다른 실기체 텔레옵", errors.getvalue())
+                        connect.assert_not_called()
+                        connect.return_value = (Mock(), "sport", 500)
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            self.assertEqual(cli.main(["--status", "--interface", "lo"]), 0)
+                finally:
+                    proc.kill()
+            with patch.object(cli, "LIVE_LOCK", path), cli.live_session_lock():
+                self.assertTrue(Path(path).is_file())
 
 
 class TerminalLoopTests(unittest.TestCase):

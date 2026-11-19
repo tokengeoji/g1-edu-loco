@@ -32,13 +32,19 @@ RUN set -eux; \
 
 ENV CC=/usr/bin/gcc-9 CXX=/usr/bin/g++-9
 WORKDIR /opt/unitree_ros2
-RUN git clone --depth 1 https://github.com/unitreerobotics/unitree_ros2.git .
+ARG UNITREE_ROS2_REF=668d1ec5a05d1c38d3306bdca7d59f2ba3581a88
+RUN git init -q . && \
+    git fetch --depth 1 https://github.com/unitreerobotics/unitree_ros2.git "$UNITREE_ROS2_REF" && \
+    git checkout -q --detach FETCH_HEAD
 
 # Build Cyclone DDS before sourcing Foxy, then build the RMW and message
 # packages against this copy. Limit compiler parallelism on the Orin.
 WORKDIR /opt/unitree_ros2/cyclonedds_ws
+ARG RMW_CYCLONEDDS_FOXY_REF=c12abc56983204f1d91f2d839d394528c7b29b42
 RUN set -ex; \
-    git clone --depth 1 --branch foxy https://github.com/ros2/rmw_cyclonedds.git src/rmw_cyclonedds; \
+    git init -q src/rmw_cyclonedds; \
+    git -C src/rmw_cyclonedds fetch --depth 1 https://github.com/ros2/rmw_cyclonedds.git "$RMW_CYCLONEDDS_FOXY_REF"; \
+    git -C src/rmw_cyclonedds checkout -q --detach FETCH_HEAD; \
     git clone --depth 1 --branch 0.10.2 https://github.com/eclipse-cyclonedds/cyclonedds.git src/cyclonedds; \
     export MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2; \
     colcon build --merge-install --executor sequential --packages-select cyclonedds \

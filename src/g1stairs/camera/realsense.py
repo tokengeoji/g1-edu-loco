@@ -149,6 +149,8 @@ def record(seconds, width, height, fps, device_index, write_frame, metadata):
         metadata.update(
             model=model, guide_camera_model=G1_HEAD_MODEL, fps=actual_profile[2],
             requested_depth_profile=_describe_profile(requested_profile),
+            depth_scale_source="librealsense.depth_frame.get_units",
+            intrinsics_source="librealsense.video_stream_profile.get_intrinsics",
             intrinsics={
                 "width": intr.width, "height": intr.height, "fx": intr.fx, "fy": intr.fy,
                 "cx": intr.ppx, "cy": intr.ppy, "distortion": _enum_name(intr.model),

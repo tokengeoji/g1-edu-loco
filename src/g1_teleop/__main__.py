@@ -2,6 +2,7 @@
 """Run the G1 locomotion terminal. The default simulation is offline."""
 
 import argparse
+import fcntl
 import os
 import select
 import signal
@@ -9,7 +10,7 @@ import sys
 import termios
 import time
 import tty
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 from .control import Controller, MODES
 
@@ -48,17 +49,23 @@ class DryClient:
 
 
 def sdk_client(service):
+    from unitree_sdk2py.g1.loco.g1_loco_api import LOCO_SERVICE_NAME
     from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
-    from unitree_sdk2py.rpc.client import Client
 
-    class NamedLocoClient(LocoClient):
-        def __init__(self):
-            # LocoClient fixes its service in the constructor. Keep its official
-            # API registration and request methods for either firmware name.
-            Client.__init__(self, service, False)
-            self.first_shake_hand_stage_ = -1
+    if service == LOCO_SERVICE_NAME:
+        client = LocoClient()
+    elif service == "loco":
+        from unitree_sdk2py.rpc.client import Client
 
-    client = NamedLocoClient()
+        class LegacyLocoClient(LocoClient):
+            def __init__(self):
+                # Before ai_sport 8.2 Unitree used this endpoint for the same
+                # RPCs. Inherit the pinned SDK's Init and all locomotion methods.
+                Client.__init__(self, "loco", False)
+
+        client = LegacyLocoClient()
+    else:
+        raise ValueError(f"Unsupported G1 locomotion service: {service}")
     client.SetTimeout(0.5)
     client.Init()
     return client
@@ -89,6 +96,21 @@ def connect(domain, interface, service):
     return discover(service)
 
 
+LIVE_LOCK = "/run/g1-tools/teleop.lock"
+
+
+@contextmanager
+def live_session_lock():
+    # Every docker exec in this container sees the same inode. Leave it in
+    # place across sessions; closing the descriptor releases the kernel lock.
+    with open(LIVE_LOCK, "a", encoding="ascii") as stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError("이 컨테이너에서 다른 실기체 텔레옵이 실행 중입니다.") from error
+        yield
+
+
 class TerminalKeys:
     """Accept one fresh key or standard arrow. Consume reports and pasted text."""
 
@@ -105,6 +127,14 @@ class TerminalKeys:
     def read(self, data):
         if not data:
             return "x"
+        if len(data) > 1 and self.state == "normal" and all(byte in self.commands for byte in data):
+            # A new stop/exit can arrive next to an old key while an RPC was
+            # blocked. Never replay movement or mode changes from that buffer.
+            if any(byte in b"x\x03\x04" for byte in data):
+                return "x"
+            if b"g" in data:
+                return "g"
+            return " " if b" " in data else "\x1b"
         now = time.monotonic()
         if self.state == "esc" and len(data) == 1 and data[0] in self.commands:
             if now - self.arrow_started > 0.15:
@@ -271,19 +301,20 @@ def main(argv=None):
     if not args.status and not (sys.stdin.isatty() and sys.stdout.isatty()):
         parser.error("키보드 제어에는 대화형 TTY가 필요합니다. Docker에서는 -it를 사용하세요.")
     try:
-        if args.live or args.status:
-            network = f"NIC={args.interface} · DDS domain={args.domain}"
-            try:
-                client, service, fsm = connect(args.domain, args.interface, args.service)
-            except Exception as error:
-                raise RuntimeError(f"{network} · service={args.service} · {error}") from error
-            show(f"현재 FSM={fsm} · {network} · service={service}")
-            if args.status:
-                return 0
-        else:
-            client = DryClient()
-            show("오프라인 모의 제어 · 초기 FSM=4")
-        interact(Controller(client, waist_3dof=args.waist_3dof))
+        with live_session_lock() if args.live else nullcontext():
+            if args.live or args.status:
+                network = f"NIC={args.interface} · DDS domain={args.domain}"
+                try:
+                    client, service, fsm = connect(args.domain, args.interface, args.service)
+                except Exception as error:
+                    raise RuntimeError(f"{network} · service={args.service} · {error}") from error
+                show(f"현재 FSM={fsm} · {network} · service={service}")
+                if args.status:
+                    return 0
+            else:
+                client = DryClient()
+                show("오프라인 모의 제어 · 초기 FSM=4")
+            interact(Controller(client, waist_3dof=args.waist_3dof))
     except EndSession:
         return 0
     except (OSError, ImportError, RuntimeError, termios.error) as error:

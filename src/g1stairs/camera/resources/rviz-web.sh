@@ -14,7 +14,7 @@ port=$((10#$port))
 self_test=false
 if [[ ${1:-} == --self-test ]]; then self_test=true; shift; fi
 if [[ $self_test == false && ! -t 1 ]]; then
-  echo 'Run g1cam rviz interactively so the session password goes only to your terminal.' >&2
+  echo 'Run g1 camera rviz interactively so the session password goes only to your terminal.' >&2
   exit 2
 fi
 state=$(mktemp -d)
@@ -55,7 +55,7 @@ done
 
 websockify --web /usr/share/novnc "127.0.0.1:$port" "127.0.0.1:$rfb_port" &
 children+=("$!")
-rviz2 -d /opt/g1/camera.rviz "$@" &
+rviz2 -d /opt/g1-tools/g1stairs/camera/resources/image.rviz "$@" &
 children+=("$!")
 
 # Wait for a mapped RViz window and the noVNC page before announcing the viewer.

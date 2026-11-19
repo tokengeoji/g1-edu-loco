@@ -25,11 +25,13 @@ class MeasurementOptions:
 
 def _horizontal_pairs(delta, max_slope, options):
     horizontal_length = np.linalg.norm(delta[..., :2], axis=-1)
-    return (
-        (horizontal_length > 1e-4)
-        & (horizontal_length < options.grid_m * 3)
-        & (np.abs(delta[..., 2]) <= max_slope * horizontal_length + options.height_tolerance_m / 5)
-    )
+    # Missing depth is represented by NaN; comparisons should exclude those pairs.
+    with np.errstate(invalid="ignore"):
+        return (
+            (horizontal_length > 1e-4)
+            & (horizontal_length < options.grid_m * 3)
+            & (np.abs(delta[..., 2]) <= max_slope * horizontal_length + options.height_tolerance_m / 5)
+        )
 
 
 def _horizontal_samples(points, options):

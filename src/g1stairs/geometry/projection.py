@@ -34,25 +34,6 @@ class Calibration:
         return cls(rotation, translation, frame_id, ground)
 
 
-def _brown_conrady_rays(x_distorted, y_distorted, coefficients):
-    k1, k2, p1, p2, k3 = coefficients
-    x, y = x_distorted, y_distorted
-    for _ in range(16):
-        radius_sq = x * x + y * y
-        radial = 1 + radius_sq * (k1 + radius_sq * (k2 + radius_sq * k3))
-        tangent_x = 2 * p1 * x * y + p2 * (radius_sq + 2 * x * x)
-        tangent_y = 2 * p2 * x * y + p1 * (radius_sq + 2 * y * y)
-        if not np.all(np.isfinite(radial)) or np.any(np.abs(radial) < 1e-9):
-            raise ValueError("Brown-Conrady intrinsics produced an invalid inverse")
-        next_x = (x_distorted - tangent_x) / radial
-        next_y = (y_distorted - tangent_y) / radial
-        error = max(float(np.max(np.abs(next_x - x))), float(np.max(np.abs(next_y - y))))
-        x, y = next_x, next_y
-        if error < 1e-7:
-            return x, y
-    raise ValueError("Brown-Conrady depth deprojection did not converge")
-
-
 def _sdk_rays(width, height, intrinsics, model, coefficients):
     try:
         import pyrealsense2 as rs
@@ -75,7 +56,8 @@ def _sdk_rays(width, height, intrinsics, model, coefficients):
     return rays
 
 
-def camera_rays(intrinsics, *, use_realsense_sdk=False):
+def camera_rays(intrinsics):
+    """Compute reusable optical rays with librealsense for every recorded depth source."""
     width, height = int(intrinsics["width"]), int(intrinsics["height"])
     fx, fy, cx, cy = (float(intrinsics[key]) for key in ("fx", "fy", "cx", "cy"))
     if width < 2 or height < 2 or fx <= 0 or fy <= 0 or not np.all(np.isfinite((fx, fy, cx, cy))):
@@ -84,20 +66,13 @@ def camera_rays(intrinsics, *, use_realsense_sdk=False):
     coefficients = np.asarray(intrinsics.get("coefficients", []), dtype=float)
     if coefficients.ndim != 1 or not np.all(np.isfinite(coefficients)):
         raise ValueError("invalid distortion coefficients")
-    sdk_only_models = ("inverse_brown_conrady", "kannala_brandt4", "ftheta")
-    if model not in ("none", "brown_conrady") + sdk_only_models:
+    if model not in ("none", "brown_conrady", "inverse_brown_conrady", "kannala_brandt4", "ftheta"):
         raise ValueError("unsupported depth distortion model: %s" % model)
     if model == "none":
         coefficients = np.zeros(5)
     elif coefficients.shape != (5,):
         raise ValueError("%s requires five distortion coefficients" % model)
-    if use_realsense_sdk or model in sdk_only_models:
-        return _sdk_rays(width, height, (fx, fy, cx, cy), model, coefficients)
-    u, v = np.meshgrid(np.arange(width, dtype=float), np.arange(height, dtype=float))
-    x, y = (u - cx) / fx, (v - cy) / fy
-    if model == "brown_conrady":
-        x, y = _brown_conrady_rays(x, y, coefficients)
-    return np.stack((x, y, np.ones_like(x)), axis=-1)
+    return _sdk_rays(width, height, (fx, fy, cx, cy), model, coefficients)
 
 
 def deproject(depth, rays, depth_scale_m, calibration):

@@ -30,7 +30,7 @@ PC2에 SSH로 접속해 아래 블록을 실행하면 **공통 이미지 `g1-jsj
 | 통신 | Cyclone DDS C 및 Python 0.10.2, Foxy rmw_cyclonedds_cpp |
 | Unitree | Unitree SDK2 C++ 및 Python, unitree_hg·unitree_go·unitree_api 메시지 |
 
-카메라와 키보드 원격조종은 이 이미지에서 파생되는 별도 빌드입니다. [카메라](../../README.md#camera) · [키보드 원격조종 및 원본 상태 모니터](../../g1_teleop/README.md) · [Unitree ROS 2](https://github.com/unitreerobotics/unitree_ros2)
+다음 단계에서 이 베이스로 `jsj-g1-tools:foxy`를 한 번 빌드합니다. 온도 측정, 텔레옵, 카메라와 계단 계산은 모두 `jsj-g1-tools`에서 실행합니다. [통합 컨테이너 시작](../../README.md#pc2) · [공식 SDK 버전과 적용 범위](../../README.md#sdk)
 
 ## PC2에서 버전과 NIC 확인
 

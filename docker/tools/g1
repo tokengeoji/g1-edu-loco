@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Author: Codex (IIC)
+set -euo pipefail
+
+# The acquisition, replay, dashboard and measurement CLIs all default to ./runs.
+cd /workspace
+command=${1:-help}
+if (($#)); then shift; fi
+case "$command" in
+  interfaces) exec ip -br -4 addr ;;
+  health)
+    if [[ ${1:-} == --help || ${1:-} == -h ]]; then
+      echo 'g1 health NIC [warn=70] [danger=80] [cold_warn=10] [cold_danger=5]'
+      exit 0
+    fi
+    exec g1_health_monitor "$@"
+    ;;
+  monitor) exec python3 -m g1stairs.monitoring "$@" ;;
+  teleop) exec python3 -m g1_teleop "$@" ;;
+  stairs) exec python3 -m g1stairs.geometry "$@" ;;
+  camera)
+    # Camera transport may use a different domain/NIC from Unitree state/locomotion.
+    export ROS_DOMAIN_ID=${G1_CAMERA_DOMAIN:-${ROS_DOMAIN_ID:-0}}
+    [[ $ROS_DOMAIN_ID =~ ^[0-9]+$ ]] || { echo 'Invalid camera DDS domain' >&2; exit 2; }
+    if [[ -n ${G1_CAMERA_IFACE:-} ]]; then
+      if [[ ! $G1_CAMERA_IFACE =~ ^[[:alnum:]_.:-]+$ || ! -d /sys/class/net/$G1_CAMERA_IFACE ]]; then
+        echo "Unknown camera NIC: $G1_CAMERA_IFACE" >&2
+        exit 2
+      fi
+      export CYCLONEDDS_URI="<CycloneDDS><Domain><General><Interfaces><NetworkInterface name=\"$G1_CAMERA_IFACE\"/></Interfaces></General></Domain></CycloneDDS>"
+    fi
+    case "${1:-}" in
+      --help|-h|'')
+        python3 -m g1stairs.camera --help
+        printf '\nPC2 tools: probe-usb, rviz [--self-test], compressed-view TOPIC\n'
+        ;;
+      rviz)
+        shift
+        exec xvfb-run -a -s "-screen 0 1280x800x24 -nolisten tcp +extension GLX" \
+          bash /opt/g1-tools/g1stairs/camera/resources/rviz-web.sh "$@"
+        ;;
+      compressed-view) shift; exec python3 -m g1stairs.camera.compressed_view "$@" ;;
+      probe-usb) shift; exec python3 -m g1stairs.camera probe "$@" ;;
+      *) exec python3 -m g1stairs.camera "$@" ;;
+    esac
+    ;;
+  help|--help|-h)
+    cat <<'HELP'
+g1 interfaces                       PC2 network interfaces
+g1 health NIC [options]             Original C++ motor/battery monitor (DDS 0)
+g1 monitor COMMAND [options]        Web dashboard and state recordings
+g1 teleop [options]                 Keyboard control (default offline); --status reads only
+g1 camera COMMAND [options]         ROS/DDS discovery, capture and replay; also rviz, compressed-view, probe-usb
+g1 stairs measure [options]         Measure recorded depth in /workspace/runs
+HELP
+    ;;
+  *) echo "Unknown command: $command. Run g1 --help." >&2; exit 2 ;;
+esac

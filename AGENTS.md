@@ -14,7 +14,8 @@
 ## 이미지, 이름과 작성자
 
 - 기본 환경은 Ubuntu 20.04 ARM64, ROS 2 Foxy, Python 3.8, GCC 9, CMake 3.16이다. 공통 베이스에 Unitree SDK2 C++·Python, `unitree_ros2`, 호환 Cyclone DDS 0.10.2 및 Foxy용 `rmw_cyclonedds_cpp`를 둔다. Node.js, Codex, Claude Code는 공통 베이스에서 제외한다.
-- 이 프로젝트에서 지정한 공통 이미지 이름은 `g1-jsj:base`다. 같은 저장소의 카메라 이미지는 `g1-jsj:realsense`다. 별도로 만드는 이미지와 작업 컨테이너에는 `jsj-` 접두사를 사용한다. 컨테이너는 실제 개발하는 기능에 맞춰 생성한다. 예를 들어 보행에는 `jsj-loco`, 모니터에는 `jsj-monitor`, 센서에는 `jsj-sensor`를 사용한다. 서로 다른 기능이 하나의 범용 컨테이너 이름을 공유하지 않는다.
+- 공통 빌드 이미지는 `g1-jsj:base`, 통합 CPU 이미지는 `jsj-g1-tools:foxy`, PC2에서 운영하는 컨테이너는 `jsj-g1-tools` 하나다. 배터리·온도 모니터, 키보드 텔레옵, 카메라, 계단 치수 계산을 이 컨테이너에 넣고 터미널마다 `docker exec`로 실행한다. 기능 구분은 `src/` 하위 소스 디렉터리와 CLI 하위 명령으로 유지한다. 저장 경로는 `/workspace/runs/<run>/`으로 통일한다.
+- 텔레옵은 G1에 탑재된 보행 제어기에 고수준 명령을 전송한다. 별도 개발할 보행 정책, 학습 및 저수준 제어기는 통합 도구 컨테이너의 실행 범위에서 분리한다. 현재 코드는 별도의 보행 컨테이너를 시작하지 않는다.
 - 프로젝트 C++ 패키지는 C++17을 사용한다. SDK2 C++의 설치 경로는 `/opt/unitree_robotics`, 소스와 예제 경로는 `/opt/unitree_sdk2`다. 가져온 코드의 빌드 설정과 원저자 표시를 보존한다. 주석을 지원하는 새 소스 파일의 첫머리에는 실제 작성자를 표시한다. 스크립트의 shebang은 첫 줄에 유지한다.
 
 ## 실기체 운용
@@ -25,6 +26,7 @@
 
 ## 근거와 기록
 
+- 하드웨어와 통신하는 코드는 공식 인터페이스를 사용한다. G1 상태·보행은 Unitree SDK2의 IDL·ChannelSubscriber·LocoClient, USB D435i는 RealSense SDK 2.0, ROS 영상은 ROS 2 Foxy의 메시지와 클라이언트 API, DDS 진단은 Eclipse Cyclone DDS API를 사용한다. 계단 인식은 공식 SDK의 깊이 좌표 변환 결과에 적용하는 프로젝트 알고리즘이다. 하드웨어 전용 상태 코드, 깊이 단위, 좌표 변환값을 추정해서 넣지 않는다.
 - 기체 구성, 버전, 모드, 센서와 조작 절차는 IIC 지정 Google Drive 자료에서 확인한다. 자료에 연결된 제조사 문서·SDK와 실제 관측 결과를 구분한다. 참고 저장소의 설정과 경보값을 제조사 사양으로 인용하지 않는다. 연구실 Drive에서 `unitree_g1_sdk_guide.md`와 `G1 사용자 매뉴얼 v1.5.3.pdf`를 확인한다.
 - 변경은 요청 범위로 제한하고, 실제 검증한 환경·결과와 아직 실기체에서 확인하지 않은 사항을 구분해 기록한다. 비밀번호와 비밀키를 코드, 에이전트 지침, 로그에 남기지 않는다. 이 저장소에 `CLAUDE.md`를 두는 경우 공통 규칙을 이 문서와 동일하게 유지한다.
 - 운영 규칙 원문은 IIC 노션의 `AGENTS.md`에서 확인한다. 참고 저장소의 개인 이름·접두사는 해당 작성자의 자산을 식별한다. [참고 저장소 규칙](https://github.com/duckptr/g1-edu-tools/blob/main/CLAUDE.md) · [참고 저장소 실행 안내](https://github.com/duckptr/g1-edu-tools/blob/main/README.md)
