@@ -88,7 +88,7 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(self.channel_events, [("open", "test-nic", 17), ("close", "test-nic", 17)])
 
     def test_real_snapshot_seeds_local_fsm_and_every_operation_stays_local(self):
-        keys = [b"f", b"w", b"2", b"\r", b"w", b"@", b" ", b"w", b"x"]
+        keys = [b"f", b"i", b"2", b"\r", b"i", b"k", b"@", b"i", b"\x04"]
         self.assertEqual(self.keyboard(self.args, keys), 0)
         text = self.output.getvalue()
         self.assertIn("[시작 시점 실측] 현재 FSM=4", text)
@@ -102,7 +102,7 @@ class PreviewTests(unittest.TestCase):
         self.assertNotIn("[모의] SetVelocity(", before)
         self.assertIn("[모의] SetSpeedMode(1)", after)
         self.assertEqual(after.count("[모의] SetVelocity(0.15, 0.0, 0.0,"), 2)
-        self.assertEqual(after.count("[모의] SetVelocity(0.0, 0.0, 0.0,"), 2)  # Space and exit.
+        self.assertEqual(after.count("[모의] SetVelocity(0.0, 0.0, 0.0,"), 2)  # k and exit.
         self.assertEqual(self.channel_events, [("open", "test-nic", 17), ("close", "test-nic", 17)])
         self.factory.assert_called_once_with("sport")
         self.robot.GetFsmId.assert_called_once_with()
@@ -110,7 +110,7 @@ class PreviewTests(unittest.TestCase):
 
     def test_terminal_error_during_motion_closes_only_the_local_controller(self):
         self.robot.GetFsmId.return_value = (0, 802)
-        self.assertEqual(self.keyboard(self.args, [b"w", OSError("TTY disconnected")]), 1)
+        self.assertEqual(self.keyboard(self.args, [b"i", OSError("TTY disconnected")]), 1)
         self.assertIn("TTY disconnected", self.errors.getvalue())
         text = self.output.getvalue()
         self.assertIn("[모의] SetVelocity(0.15, 0.0, 0.0,", text)
@@ -170,16 +170,18 @@ class PreviewTests(unittest.TestCase):
         self.connect.assert_not_called()
 
     def test_dry_run_does_not_attempt_a_snapshot_or_open_any_connection(self):
-        self.assertEqual(self.keyboard(["--dry-run"], [b"x"]), 0)
+        self.assertEqual(self.keyboard(["--dry-run"], [b"\x04"]), 0)
         self.assertIn("초기 FSM=802", self.output.getvalue())
         self.assertEqual(self.channel_events, [])
         self.factory.assert_not_called()
         self.connect.assert_not_called()
 
-    def test_plain_status_reads_only_the_fsm_and_exits_before_keyboard(self):
+    def test_plain_status_reports_diagnostics_and_exits_before_keyboard(self):
         self.connect.side_effect = lambda domain, nic, service: cli.discover(service)
-        with patch.object(cli, "interact") as interact:
+        with patch.object(cli, "interact") as interact, \
+                patch(__package__ + ".status.status_details", return_value="SDK 상태") as details:
             self.assertEqual(cli.main(["--status", "--interface", "test-nic", "--service", "sport"]), 0)
             interact.assert_not_called()
+            details.assert_called_once_with(self.robot)
         self.assertEqual(self.channel_events, [])
         self.robot.GetFsmId.assert_called_once_with()

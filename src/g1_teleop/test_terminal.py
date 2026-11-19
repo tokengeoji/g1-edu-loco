@@ -22,19 +22,19 @@ from . import __main__ as cli
 class KeyboardInputTests(unittest.TestCase):
     def test_single_commands_and_complete_arrows(self):
         keys = cli.TerminalKeys()
-        for key in "wasdqefx?+-=!@#$0123456789m \r\n":
+        for key in "uiojk lm,.UIOJKLM<>qzwxecf?+-=!@#$0123456789 \r\n":
             self.assertEqual(keys.read(key.encode()), key)
         for unused_key in b"rg":
             self.assertEqual(keys.read(bytes([unused_key])), "\x1b")
-        for seq, key in [(b"\x1b[A", "w"), (b"\x1bOB", "s"),
-                         (b"\x1b[D", "q"), (b"\x1bOC", "e")]:
+        for seq, key in [(b"\x1b[A", "i"), (b"\x1bOB", ","),
+                         (b"\x1b[D", "j"), (b"\x1bOC", "l")]:
             self.assertEqual(keys.read(seq), key)
             self.assertEqual(keys.read(seq[:1]), "\x1b")
             self.assertEqual(keys.read(seq[1:]), key)
 
     def test_ambiguous_bursts_and_reports_do_not_move_or_change_modes(self):
         keys = cli.TerminalKeys()
-        for seq in [b"ww", b"2\r", b"m\r", b"\x1b[Aw", b"w\x1b[A", b"\x1b[1;5D",
+        for seq in [b"ii", b"2\r", b"m\r", b"\x1b[Ai", b"i\x1b[A", b"\x1b[1;5D",
                     b"\x1bw", b"\x1b[I", b"\x1b[O", b"\x1b[", b"3", b"~",
                     b"\x1b]report", b"w", b"\x07", b"\x1b[M", b"w", b"r", b"d"]:
             self.assertEqual(keys.read(seq), "\x1b", seq)
@@ -46,12 +46,30 @@ class KeyboardInputTests(unittest.TestCase):
             self.assertEqual(keys.read(bytes([byte])), "\x1b")
         self.assertEqual(keys.read(b"w"), "w")
         for seq in [b"\x03", b"\x04", b""]:
-            self.assertEqual(keys.read(seq), "x")
+            self.assertEqual(keys.read(seq), keys.exit_key)
 
     def test_stale_direction_cannot_swallow_stop_or_exit(self):
         keys = cli.TerminalKeys()
-        self.assertEqual(keys.read(b"s "), " ")
-        self.assertEqual(keys.read(b"sx"), "x")
+        self.assertEqual(keys.read(b"i "), " ")
+        self.assertEqual(keys.read(b"ik"), " ")
+        self.assertEqual(keys.read(b"i\x04"), keys.exit_key)
+        self.assertEqual(keys.read(b"ii", repeat_key="i"), "i")
+        self.assertEqual(keys.read(b"ij", repeat_key="i"), "\x1b")
+        self.assertEqual(keys.read(b",,", repeat_key="i"), "\x1b")
+        self.assertEqual(keys.read(b"\x1b[A" * 3, repeat_key="i"), "i")
+        self.assertEqual(keys.read(b"\x1b[A" * 3, repeat_key=","), "\x1b")
+
+    def test_queued_repeats_coalesce_and_never_override_stops(self):
+        def drain(events):
+            read_ready = [([91], [], [])] * len(events) + [([], [], [])]
+            with patch.object(cli.select, "select", side_effect=read_ready), \
+                    patch.object(cli.os, "read", side_effect=events):
+                return cli.poll_queued(91, cli.TerminalKeys(), "i")
+
+        self.assertEqual(drain([b"i", b"ii", b"i"]), "i")
+        self.assertEqual(drain([b"i", b",", b"i"]), "\x1b")
+        self.assertEqual(drain([b"i", b"k", b"ii"]), " ")
+        self.assertEqual(drain([b"i", b" ", b"\x04"]), cli.TerminalKeys.exit_key)
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -87,11 +105,14 @@ class DiscoveryTests(unittest.TestCase):
     def test_status_reports_discovered_fsm_without_control_or_tty(self):
         output = io.StringIO()
         client = Mock()
-        with patch.object(cli, "connect", return_value=(client, "loco", 4)) as connect:
+        with patch.object(cli, "connect", return_value=(client, "loco", 4)) as connect, \
+                patch(__package__ + ".status.status_details", return_value="SDK 상태") as details:
             with patch.dict(os.environ, ROS_DOMAIN_ID="8"), contextlib.redirect_stdout(output):
                 self.assertEqual(cli.main(["--status", "--interface", "eth0"]), 0)
         connect.assert_called_once_with(8, "eth0", "auto")
         self.assertEqual(client.mock_calls, [])
+        details.assert_called_once_with(client)
+        self.assertIn("SDK 상태", output.getvalue())
         self.assertIn("현재 FSM=4 · NIC=eth0 · DDS domain=8 · service=loco", output.getvalue())
 
     def test_failed_discovery_shows_network_and_rpc_code(self):
@@ -127,7 +148,8 @@ with open(sys.argv[1], "a") as stream:
                         self.assertIn("다른 실기체 텔레옵", errors.getvalue())
                         connect.assert_not_called()
                         connect.return_value = (Mock(), "sport", 500)
-                        with contextlib.redirect_stdout(io.StringIO()):
+                        with contextlib.redirect_stdout(io.StringIO()), \
+                                patch(__package__ + ".status.status_details", return_value="SDK 상태"):
                             self.assertEqual(cli.main(["--status", "--interface", "lo"]), 0)
                 finally:
                     proc.kill()
@@ -149,7 +171,7 @@ class TerminalLoopTests(unittest.TestCase):
         )
         self.addCleanup(self.reap, self.proc)
         self.output = b""
-        self.await_output("준비 ·")
+        self.await_output("준비 ·", timeout=12)
         self.assertFalse(termios.tcgetattr(slave)[3] & termios.ICANON)
 
     @staticmethod
@@ -158,9 +180,9 @@ class TerminalLoopTests(unittest.TestCase):
             proc.kill()
         proc.wait(timeout=3)
 
-    def await_output(self, text):
+    def await_output(self, text, timeout=3):
         target = text.encode()
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + timeout
         while target not in self.output:
             if not select.select([self.master], [], [], max(0, deadline - time.monotonic()))[0]:
                 self.fail(f"Missing {text!r} in {self.output.decode(errors='replace')!r}")
@@ -199,30 +221,26 @@ raise SystemExit(cli.main())
         transcript = self.await_output("SetSpeedMode(1) 수락")
         self.assertIn(b"SetSpeedMode(1)", transcript)
         self.assertNotIn(b"SetVelocity(", transcript)
-        os.write(self.master, b"w")
+        os.write(self.master, b"i")
         self.await_output("SetVelocity(0.15, 0.0, 0.0, ")
-        os.write(self.master, b"x")
+        os.write(self.master, b"\x04")
         self.assert_restored()
 
-    def test_explicit_regular_and_run_switches_and_status_readback(self):
+    def test_reverse_arc_is_motion_and_does_not_request_regular_mode(self):
         self.start()
-        for key, target in [(b"m", 500), (b"2", 802)]:
-            with self.subTest(target=target):
-                os.write(self.master, key)
-                self.await_output("Enter로 요청, Esc로 취소")
-                os.write(self.master, b"\r")
-                self.await_output(f"[모의] SetFsmId({target})")
-                self.await_output(f"현재 FSM={target}")
-                os.write(self.master, b"f")
-                self.await_output(f"현재 FSM={target}")
-        os.write(self.master, b"x")
+        os.write(self.master, b"m")
+        seen = self.await_output("SetVelocity(-0.15, 0.0, -0.3, ")
+        self.assertNotIn(b"SetFsmId(", seen)
+        os.write(self.master, b"k")
+        self.await_output("SetVelocity(0.0, 0.0, 0.0, ")
+        os.write(self.master, b"\x04")
         self.assert_restored()
 
     def test_signal_stops_owned_motion_and_restores_terminal(self):
         for sig in [signal.SIGHUP, signal.SIGINT, signal.SIGTERM]:
             with self.subTest(signal=sig):
                 self.start()
-                os.write(self.master, b"w")
+                os.write(self.master, b"i")
                 self.await_output("SetVelocity(0.15, 0.0, 0.0, ")
                 self.proc.send_signal(sig)
                 self.await_output("SetVelocity(0.0, 0.0, 0.0, ")
@@ -242,11 +260,11 @@ def slow(self, vx, vy, yaw, duration):
 cli.DryClient.SetVelocity = slow
 sys.exit(cli.main())
 """)
-        os.write(self.master, b"w")
+        os.write(self.master, b"i")
         self.await_output("in RPC")
-        os.write(self.master, b"s")
+        os.write(self.master, b",")
         self.await_output("SetVelocity(0.15, 0.0, 0.0, ")
-        os.write(self.master, b"x")
+        os.write(self.master, b"\x04")
         self.assert_restored()
         while select.select([self.master], [], [], 0)[0]:
             self.output += os.read(self.master, 8192)

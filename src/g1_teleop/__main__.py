@@ -12,18 +12,21 @@ import time
 import tty
 from contextlib import contextmanager, nullcontext
 
-from .control import Controller, MODES
+from .control import Controller, MODES, VELOCITY
 
 
-HELP = """f 현재 FSM    ? 키 안내    x 종료
-w/s 전진·후진    a/d 왼쪽·오른쪽 이동    q/e 좌회전·우회전
-↑/↓ 전진·후진    ←/→ 좌회전·우회전    +/- 이동 속도 배율
-!/@/#/$ (Shift+1/2/3/4) FSM 802 속도 상한 단계 0/1/2/3
-Space 속도 0    모드 키를 누른 뒤 Enter로 요청    Esc 선택 취소
-%s
-이동 키는 0.25초 동안 적용됩니다. 연속 이동은 키를 반복 입력하세요.
-Space는 이동 속도를 0으로 요청합니다.
-FSM 802에서는 내장 보행기가 팔을 흔들 수 있습니다. 키보드에서 팔 자세 명령을 보내지 않습니다.""" % "\n".join(
+HELP = """   u    i    o       전진하며 좌회전 / 전진 / 전진하며 우회전
+   j    k    l       좌회전 / 정지 / 우회전
+   m    ,    .       후진하며 우회전 / 후진 / 후진하며 좌회전
+Shift+J/L 옆걸음   방향키 ↑↓ 전후진 · ←→ 회전   k 또는 Space 정지
+누르고 있으면 연속 이동 · 마지막 입력 후 최대 1초   q/z 속도 올림/내림
+2 → Enter 보행 모드(802)   f 현재 모드   ? 전체 키   Ctrl+C 종료"""
+
+EXTRA_HELP = """Shift+U/I/O·J/L·M/</> 회전 없이 전후·좌우 이동
+w/x 직선·옆걸음 속도 올림/내림    e/c 회전 속도 올림/내림
+!/@/#/$ FSM 802 속도 상한 0/1/2/3
+모드 키를 누른 뒤 4초 안에 Enter로 요청 · Esc로 취소
+%s""" % "\n".join(
     f"  {key}  {mode[2]}" for key, mode in MODES.items()
 )
 
@@ -120,8 +123,9 @@ def live_session_lock():
 class TerminalKeys:
     """Accept one fresh key or standard arrow. Consume reports and pasted text."""
 
-    commands = b"wasdqefx?+-=!@#$ \r\n\x03\x04" + "".join(MODES).encode("ascii")
-    arrows = {ord("A"): "w", ord("B"): "s", ord("C"): "e", ord("D"): "q"}
+    exit_key = "\x04"
+    commands = b"kKqzwxecf?+-=!@#$ \r\n\x03\x04" + "".join((*VELOCITY, *MODES)).encode("ascii")
+    arrows = {ord("A"): "i", ord("B"): ",", ord("C"): "l", ord("D"): "j"}
 
     def __init__(self):
         self.state = "normal"
@@ -130,15 +134,24 @@ class TerminalKeys:
         self.clean_arrow = False
         self.mouse_bytes = 0
 
-    def read(self, data):
+    def read(self, data, repeat_key=None):
         if not data:
-            return "x"
+            return self.exit_key
+        # SSH may deliver several identical autorepeat arrows in one read.
+        if (self.state == "normal" and repeat_key and len(data) > 3 and
+                data[:2] in (b"\x1b[", b"\x1bO") and self.arrows.get(data[2]) == repeat_key and
+                data == data[:3] * (len(data) // 3)):
+            return repeat_key
         if len(data) > 1 and self.state == "normal" and all(byte in self.commands for byte in data):
             # A new stop/exit can arrive next to an old key while an RPC was
             # blocked. Never replay movement or mode changes from that buffer.
-            if any(byte in b"x\x03\x04" for byte in data):
-                return "x"
-            return " " if b" " in data else "\x1b"
+            if any(byte in (3, 4) for byte in data):
+                return self.exit_key
+            if any(byte in b"kK " for byte in data):
+                return " "
+            if repeat_key and data == repeat_key.encode("ascii") * len(data):
+                return repeat_key
+            return "\x1b"
         now = time.monotonic()
         if self.state == "esc" and len(data) == 1 and data[0] in self.commands:
             if now - self.arrow_started > 0.15:
@@ -198,7 +211,7 @@ class TerminalKeys:
                 else:
                     self.sequence = (self.sequence + bytes([byte]))[:4]
             elif len(data) == 1 and byte in self.commands:
-                return "x" if byte in (3, 4) else chr(byte)
+                return self.exit_key if byte in (3, 4) else chr(byte)
         return "\x1b"  # Cancel any pending mode when input is ambiguous.
 
 
@@ -232,20 +245,23 @@ def keyboard_terminal(fd):
             sys.stdout.flush()
 
 
-def poll_queued(fd, keys):
-    """Drop commands typed during an RPC, tracking paste/escape boundaries."""
-    priority = None
+def poll_queued(fd, keys, repeat_key):
+    """Keep stops or one repeat of current motion, never a buffered direction change."""
+    pending = None
     while select.select([fd], [], [], 0)[0]:
         data = os.read(fd, 4096)
-        key = keys.read(data)
-        if key == "x":
-            return "x"
+        key = keys.read(data, repeat_key)
+        if key == keys.exit_key:
+            return key
         keys.clean_arrow = False  # A queued arrow prefix must stay stale.
-        if key == " ":
-            priority = " "
-        elif not priority:
-            priority = "\x1b"
-    return priority
+        if key in ("k", "K", " "):
+            pending = " "
+        elif pending != " ":
+            if key != repeat_key:
+                pending = "\x1b"
+            elif pending is None:
+                pending = key
+    return pending
 
 
 def show(message, prefix=""):
@@ -253,33 +269,40 @@ def show(message, prefix=""):
         print(prefix + message.replace("\n", "\n" + prefix), flush=True)
 
 
-def interact(controller, *, preview=False):
+def interact(controller, *, live=False):
     fd = sys.stdin.fileno()
     keys = TerminalKeys()
-    prefix = "[모의] " if preview else ""
+    prefix = "[실기체] " if live else "[모의] "
     with keyboard_terminal(fd):
         try:
             show(HELP, prefix)
-            show("준비 · 방향키로 이동, f로 현재 모드 조회", prefix)
+            show("준비 · i 전진, k 정지", prefix)
+            if live:
+                show("키 입력이 기체로 전송됩니다. 802 내장 보행기는 팔을 흔들 수 있습니다.", prefix)
             pending = None
             while True:
                 if pending is None:
+                    received_at = time.monotonic()
                     message = controller.tick()
                     if message:
-                        pending = poll_queued(fd, keys)
+                        pending = poll_queued(fd, keys, controller.moving_key)
                         show(message, prefix)
                 if pending is None:
                     if not select.select([fd], [], [], 0.05)[0]:
                         continue
-                    pending = keys.read(os.read(fd, 4096))
+                    received_at = time.monotonic()
+                    pending = keys.read(os.read(fd, 4096), controller.moving_key)
                 key, pending = pending, None
-                if key == "x":
+                if key == keys.exit_key:
                     break
-                message = controller.handle("\x1b" if key == "?" else key)
-                pending = poll_queued(fd, keys)
+                started = time.monotonic()
+                message = controller.handle("\x1b" if key == "?" else key, received_at=received_at)
+                pending = poll_queued(fd, keys, controller.moving_key)
+                received_at = started  # An input waiting after the RPC may be this old.
                 show(message, prefix)
                 if key == "?":
                     show(HELP, prefix)
+                    show(EXTRA_HELP, prefix)
         finally:
             show(controller.close(), prefix)
 
@@ -290,7 +313,7 @@ def main(argv=None):
     mode.add_argument("--live", action="store_true", help="실제 G1 키보드 제어")
     mode.add_argument("--preview", action="store_true", help="시작 시 실제 FSM·모터 상태를 읽고 키 입력은 모의 실행")
     mode.add_argument("--dry-run", action="store_true", help="오프라인 모의 제어 (기본값)")
-    mode.add_argument("--status", action="store_true", help="실제 G1의 현재 FSM을 한 번 조회")
+    mode.add_argument("--status", action="store_true", help="실제 G1의 FSM·보행 상태·서비스 API 버전 조회")
     parser.add_argument("--interface", metavar="NIC", help="G1 연결 인터페이스")
     parser.add_argument("--domain", type=int, default=os.getenv("ROS_DOMAIN_ID") or "0",
                         help="DDS 도메인 ID (기본 ROS_DOMAIN_ID 또는 0)")
@@ -324,12 +347,14 @@ def main(argv=None):
                     show("FSM과 모터 상태는 시작 시점에만 읽었습니다. 지금부터 키 입력과 f 조회는 모두 모의 실행입니다.")
                     client = DryClient(fsm)
                 if args.status:
+                    from .status import status_details
+                    show(status_details(client))
                     return 0
             else:
                 client = DryClient()
                 show(f"오프라인 모의 제어 · 초기 FSM={client.fsm}")
             controller = Controller(client, waist_3dof=args.waist_3dof)
-            interact(controller, preview=args.preview)
+            interact(controller, live=args.live)
     except EndSession:
         return 0
     except KeyboardInterrupt:
