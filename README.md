@@ -1,24 +1,46 @@
 # G1 EDU loco 실행 가이드
 
-**PC2의 Bash 터미널**에서 필요한 기능의 코드 블록을 위에서 아래로 붙여넣으세요. 명령이 공통 이미지 `jsj-g1-base:foxy`로 컨테이너를 시작하고, 각 컨테이너 **안에서** 처음에는 `git clone`, 이후에는 `git pull --ff-only`를 실행합니다.
+처음 설정할 때는 **공통 베이스 이미지부터 빌드**합니다. 그다음 사용할 기능의 컨테이너를 만들고, 컨테이너 안에서 코드를 내려받아 실행합니다.
 
-| 원하는 작업 | 실행할 순서 |
+| 원하는 작업 | PC2에서 실행할 순서 |
 | --- | --- |
-| 전신 관절·모터 온도 GUI 열기 | [베이스 확인](#pc2) → [모니터링](#monitoring) |
-| 헤드 D435i의 실제 Depth 기록 | [베이스 확인](#pc2) → [카메라](#camera) |
-| 촬영한 계단의 높이·디딤면 깊이·폭 측정 | [카메라 기록](#camera) → [계단 측정](#geometry) |
+| 전신 관절·모터 온도 GUI 열기 | [1. 베이스 빌드](#pc2) → [2. 모니터링](#monitoring) |
+| 헤드 D435i의 실제 깊이 영상 기록 | [1. 베이스 빌드](#pc2) → [3. 카메라](#camera) |
+| 촬영한 계단의 높이·디딤면 깊이·폭 측정 | [1. 베이스 빌드](#pc2) → [3. 카메라 기록](#camera) → [4. 계단 측정](#geometry) |
 
 <a id="pc2"></a>
 
-## 1. 공통 베이스 이미지 확인
+## 1. PC2에서 공통 베이스 이미지 만들기
+
+PC2의 **Bash 터미널**에서 아래 블록 전체를 한 번 붙여넣으세요. Docker가 이 저장소의 Dockerfile을 읽어 `jsj-g1-base:foxy`를 빌드합니다. SDK 설치와 Git 복제는 이미지 빌드 안에서 실행됩니다. PC2의 L4T가 R35.3.1이면 부모 이미지가 자동 선택됩니다. 다른 버전이면 안내에 따라 해당 PC2와 호환되는 Ubuntu 20.04·ROS 2 Foxy ARM64 부모 이미지 태그를 입력하세요.
 
 ```bash
-docker image inspect jsj-g1-base:foxy --format 'image={{index .RepoTags 0}} platform={{.Os}}/{{.Architecture}}'
+(
+  set -euo pipefail
+  if grep -Eq '^#[[:space:]]+R35[[:space:]].*REVISION:[[:space:]]*3\.1([,[:space:]]|$)' /etc/nv_tegra_release 2>/dev/null; then
+    parent='dustynv/ros:foxy-ros-base-l4t-r35.3.1'
+  else
+    cat /etc/nv_tegra_release 2>/dev/null || true
+    read -rp '이 PC2의 L4T와 호환되는 ARM64 Ubuntu 20.04/Foxy 이미지 태그(미확인 시 Enter로 종료): ' parent
+    [[ -n "$parent" ]] || exit 1
+  fi
+
+  if ! docker image inspect "$parent" >/dev/null 2>&1; then
+    docker pull --platform linux/arm64 "$parent"
+  fi
+  [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}} {{if .Config.Volumes}}volumes{{else}}none{{end}}' "$parent")" == 'linux/arm64 none' ]] || {
+    echo '부모 이미지의 플랫폼과 VOLUME 선언을 확인하세요.' >&2
+    exit 1
+  }
+
+  docker build --platform linux/arm64 --build-arg BASE_IMAGE="$parent" \
+    --tag jsj-g1-base:foxy \
+    https://raw.githubusercontent.com/tokengeoji/g1-edu-loco/main/docker/base/Dockerfile
+  docker image inspect --format 'jsj-g1-base:foxy  {{.Os}}/{{.Architecture}}  {{.Id}}' jsj-g1-base:foxy
+)
 ```
 
-`linux/arm64`가 나오면 아래에서 사용할 기능으로 이동합니다. `No such image`가 나오면 **[공통 이미지 빌드 블록](docker/base/README.md#build)**을 먼저 붙여넣으세요. 빌드 정의와 명령은 이 저장소에 있습니다. [Dockerfile](docker/base/Dockerfile)
-
-각 기능의 준비 블록은 베이스 이미지로 새 컨테이너를 만들거나 같은 이미지의 기존 컨테이너를 시작합니다. 컨테이너 안의 실험 기록을 보존합니다. [Docker run](https://docs.docker.com/reference/cli/docker/container/run/)
+마지막 줄에 `jsj-g1-base:foxy  linux/arm64  sha256:…`가 출력되면 빌드가 끝난 것입니다. 관절 상태를 보려면 [2번](#monitoring), 계단을 촬영하려면 [3번](#camera)으로 이동하세요. 이 이미지는 세 컨테이너에서 공통으로 사용하므로 최초 설정 때 한 번만 빌드하면 됩니다. [Dockerfile](docker/base/Dockerfile) · [이미지 구성과 SDK 확인 명령](docker/base/README.md#sdk) · [Docker 공식 빌드 문서](https://docs.docker.com/build/concepts/context/#how-to-build-without-a-context)
 
 <a id="monitoring"></a>
 

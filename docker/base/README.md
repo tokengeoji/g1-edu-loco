@@ -1,21 +1,16 @@
-# PC2 공통 이미지 `jsj-g1-base:foxy`
+# PC2 공통 베이스 이미지 만들기
 
-세 기능 컨테이너가 사용하는 Ubuntu 20.04 ARM64 · ROS 2 Foxy · Python 3.8 이미지입니다. Unitree SDK2(C++·Python), Unitree ROS 2 메시지, CycloneDDS 0.10.2와 Git을 포함합니다. 기존 이미지가 이미 있으면 [기능별 실행 가이드](../../README.md#pc2)에서 바로 시작하세요. [Dockerfile](Dockerfile)
+`jsj-g1-base:foxy`는 모니터링·카메라·계단 측정 컨테이너의 공통 이미지입니다. Ubuntu 20.04 ARM64, ROS 2 Foxy, Python 3.8 환경에 Unitree SDK2(C++·Python), Unitree ROS 2 메시지, CycloneDDS 0.10.2와 Git을 설치합니다. [Dockerfile](Dockerfile)
 
 <a id="build"></a>
 
-## 1. PC2 터미널에서 이미지 준비
+## 1. 공통 베이스 이미지 빌드
 
-아래 **블록 전체**를 복사해 붙여넣으세요. 같은 이름의 공통 이미지가 있으면 즉시 종료합니다. 새로 만드는 경우 프로젝트 문서의 R35.3.1 예시는 PC2가 해당 L4T 버전을 보고할 때 선택합니다. 다른 버전에서는 현장에서 호환성을 확인한 부모 이미지 태그를 입력합니다. Dockerfile은 표준입력으로 전달하고 Git 복제와 패키지 설치는 이미지 빌드 레이어 안에서 실행합니다. [Docker 표준입력 빌드](https://docs.docker.com/build/concepts/context/#empty-context) · [부모 이미지 배포처](https://hub.docker.com/r/dustynv/ros/tags)
+PC2의 **Bash 터미널**에서 아래 블록 전체를 한 번 붙여넣으세요. Docker가 이 저장소의 Dockerfile을 읽어 `jsj-g1-base:foxy`를 빌드합니다. SDK 설치와 Git 복제는 이미지 빌드 안에서 실행됩니다. PC2의 L4T가 R35.3.1이면 부모 이미지가 자동 선택됩니다. 다른 버전이면 안내에 따라 해당 PC2와 호환되는 Ubuntu 20.04·ROS 2 Foxy ARM64 부모 이미지 태그를 입력하세요.
 
 ```bash
 (
   set -euo pipefail
-  if docker image inspect jsj-g1-base:foxy >/dev/null 2>&1; then
-    echo 'jsj-g1-base:foxy 준비됨'
-    exit 0
-  fi
-
   if grep -Eq '^#[[:space:]]+R35[[:space:]].*REVISION:[[:space:]]*3\.1([,[:space:]]|$)' /etc/nv_tegra_release 2>/dev/null; then
     parent='dustynv/ros:foxy-ros-base-l4t-r35.3.1'
   else
@@ -27,110 +22,25 @@
   if ! docker image inspect "$parent" >/dev/null 2>&1; then
     docker pull --platform linux/arm64 "$parent"
   fi
-  [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}} {{len .Config.Volumes}}' "$parent")" == 'linux/arm64 0' ]] || {
+  [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}} {{if .Config.Volumes}}volumes{{else}}none{{end}}' "$parent")" == 'linux/arm64 none' ]] || {
     echo '부모 이미지의 플랫폼과 VOLUME 선언을 확인하세요.' >&2
     exit 1
   }
 
-  docker build --pull=false --platform linux/arm64 --build-arg BASE_IMAGE="$parent" \
-    -t jsj-g1-base:foxy - <<'DOCKERFILE'
-ARG BASE_IMAGE
-FROM ${BASE_IMAGE}
-
-USER root
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-ARG DEBIAN_FRONTEND=noninteractive
-ENV BASH_ENV=/dev/null
-
-RUN set -eux; \
-    . /etc/os-release; \
-    test "$ID" = ubuntu; \
-    test "$VERSION_ID" = 20.04; \
-    test "$(dpkg --print-architecture)" = arm64; \
-    test -f /opt/ros/foxy/setup.bash; \
-    python3 -c 'import sys; assert sys.version_info[:2] == (3, 8)'
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git curl \
-    build-essential gcc-9 g++-9 make cmake pkg-config \
-    libyaml-cpp-dev libeigen3-dev libboost-all-dev libfmt-dev \
-    python3 python3-dev python3-pip python3-numpy python3-opencv \
-    python3-colcon-common-extensions \
-    ros-foxy-rmw-cyclonedds-cpp \
-    ros-foxy-rosidl-generator-dds-idl \
-    && rm -rf /var/lib/apt/lists/*
-
-ENV CC=/usr/bin/gcc-9 CXX=/usr/bin/g++-9
-
-RUN git clone --depth 1 \
-    https://github.com/unitreerobotics/unitree_ros2.git \
-    /opt/unitree_ros2
-
-# CycloneDDS는 Foxy 환경 source 전에 빌드
-RUN set -eux; \
-    cd /opt/unitree_ros2/cyclonedds_ws/src; \
-    git clone --depth 1 --branch foxy \
-      https://github.com/ros2/rmw_cyclonedds.git; \
-    git clone --depth 1 --branch 0.10.2 \
-      https://github.com/eclipse-cyclonedds/cyclonedds.git; \
-    cd ..; \
-    colcon build --merge-install --packages-select cyclonedds \
-      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
-
-# Foxy와 colcon 초기화 파일은 설정되지 않은 셸 변수를 읽을 수 있다.
-RUN set -ex; \
-    source /opt/ros/foxy/setup.bash; \
-    source /opt/unitree_ros2/cyclonedds_ws/install/local_setup.bash; \
-    cd /opt/unitree_ros2/cyclonedds_ws; \
-    colcon build --merge-install \
-      --packages-up-to rmw_cyclonedds_cpp unitree_go unitree_hg unitree_api \
-      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
-
-RUN set -eux; \
-    git clone --depth 1 \
-      https://github.com/unitreerobotics/unitree_sdk2.git \
-      /opt/unitree_sdk2; \
-    cmake -S /opt/unitree_sdk2 -B /opt/unitree_sdk2/build \
-      -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF \
-      -DCMAKE_INSTALL_PREFIX=/opt/unitree_robotics; \
-    cmake --build /opt/unitree_sdk2/build; \
-    cmake --install /opt/unitree_sdk2/build
-
-ENV CYCLONEDDS_HOME=/opt/unitree_ros2/cyclonedds_ws/install
-RUN set -eux; \
-    python3 -m pip install --no-cache-dir 'cyclonedds==0.10.2'; \
-    git clone --depth 1 \
-      https://github.com/unitreerobotics/unitree_sdk2_python.git \
-      /opt/unitree_sdk2_python; \
-    python3 -m pip install --no-cache-dir --no-deps \
-      /opt/unitree_sdk2_python; \
-    python3 -c 'import cyclonedds, unitree_sdk2py, numpy, cv2'
-
-# 이미지 내부에만 스크립트·bashrc 내용 생성
-RUN set -eux; \
-    mkdir -p /opt/g1 /workspace; \
-    printf '%s\n' \
-      'source /opt/ros/foxy/setup.bash' \
-      'source /opt/unitree_ros2/cyclonedds_ws/install/setup.bash' \
-      'export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp' \
-      > /opt/g1/ros_env.sh; \
-    printf '\nsource /opt/g1/ros_env.sh\n' >> /root/.bashrc
-
-ENV ROS_DOMAIN_ID=0 \
-    RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
-    BASH_ENV=/opt/g1/ros_env.sh \
-    CMAKE_PREFIX_PATH=/opt/unitree_robotics
-
-WORKDIR /workspace
-ENTRYPOINT []
-CMD ["/bin/bash"]
-DOCKERFILE
+  docker build --platform linux/arm64 --build-arg BASE_IMAGE="$parent" \
+    --tag jsj-g1-base:foxy \
+    https://raw.githubusercontent.com/tokengeoji/g1-edu-loco/main/docker/base/Dockerfile
+  docker image inspect --format 'jsj-g1-base:foxy  {{.Os}}/{{.Architecture}}  {{.Id}}' jsj-g1-base:foxy
 )
 ```
 
+마지막 줄에 `jsj-g1-base:foxy  linux/arm64  sha256:…`가 출력되면 빌드가 끝난 것입니다. [부모 이미지 배포처](https://hub.docker.com/r/dustynv/ros/tags) · [Docker 공식 빌드 문서](https://docs.docker.com/build/concepts/context/#how-to-build-without-a-context)
+
+<a id="sdk"></a>
+
 ## 2. 이미지 안의 SDK 확인
 
-PC2 터미널에 아래 블록을 붙여넣으세요. 일회성 컨테이너에서 실제 SDK와 메시지 타입을 불러옵니다. 마지막에 `Unitree SDK2 및 Foxy 메시지 확인 완료`가 출력되면 [기능별 컨테이너 생성](../../README.md#pc2)으로 진행합니다.
+PC2 터미널에 아래 블록을 붙여넣으세요. 일회성 컨테이너에서 실제 SDK와 메시지 타입을 불러옵니다. 마지막에 `Unitree SDK2 및 Foxy 메시지 확인 완료`가 출력되면 [모니터링 컨테이너](../../README.md#monitoring) 또는 [카메라 컨테이너](../../README.md#camera)를 만드세요.
 
 ```bash
 docker run --rm --name jsj-base-check --pull never --network none \
