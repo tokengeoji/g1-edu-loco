@@ -1,20 +1,13 @@
+Warning: truncated output (original token count: 6120)
+Total output lines: 546
+
 # G1 EDU 전신 상태와 온도
 
 Unitree Python SDK2에서 `unitree_hg/msg/dds_/LowState_` 타입의 `rt/lowstate`를 읽는다. 브라우저로 실시간 확인하거나 JSONL 기록을 열어 샘플을 탐색할 수 있다. 아래 Python 명령은 PC2의 `jsj-monitor` Docker 컨테이너 내부 `/opt/g1-edu-loco`에서 실행한다. [공식 Basic Motion Routine](https://support.unitree.com/home/en/G1_developer/basic_motion_routine)
 
-## 합성 데이터로 확인
-
-```bash
-python3 -m g1stairs.monitoring fixture --run monitor-demo
-python3 -m g1stairs.monitoring inspect --run monitor-demo
-python3 -m g1stairs.monitoring serve --run monitor-demo
-```
-
-브라우저에서 [http://127.0.0.1:8765](http://127.0.0.1:8765)에 접속한다. `--runs-dir`의 기본값은 현재 작업 디렉터리의 `runs`다.
-
 ## G1 EDU 연결
 
-실제 기체와 같은 네트워크의 NIC 이름과 DDS 도메인, 기체 설정에 맞는 프로필을 사용한다. 선택 가능한 프로필은 `g1-29`, `g1-29-waist-locked`, `g1-23`이다. 장비 구성을 실측하거나 기존 설정에서 확인한다. 실행 환경에 공식 Unitree SDK2 Python과 해당 SDK가 요구하는 CycloneDDS를 설치한다. [SDK 설치 안내](https://github.com/unitreerobotics/unitree_sdk2_python#installation)
+실제 기체와 같은 네트워크의 NIC 이름과 DDS 도메인, 기체 설정에 맞는 프로필을 사용한다. 선택 가능한 프로필은 `g1-29`, `g1-29-waist-locked`, `g1-23`이다. 장비 구성을 실측하거나 기존 설정에서 확인한다. 배포 이미지는 PC2의 공통 이미지에 설치된 공식 Unitree SDK2 Python과 호환 CycloneDDS를 사용한다. [SDK 설치 안내](https://github.com/unitreerobotics/unitree_sdk2_python#installation)
 
 ```bash
 python3 -m g1stairs.monitoring probe --nic "$G1_NIC" --domain "$G1_DDS_DOMAIN" --profile "$G1_PROFILE"
@@ -22,7 +15,7 @@ python3 -m g1stairs.monitoring record --nic "$G1_NIC" --domain "$G1_DDS_DOMAIN" 
 python3 -m g1stairs.monitoring serve --nic "$G1_NIC" --domain "$G1_DDS_DOMAIN" --profile "$G1_PROFILE"
 ```
 
-브라우저 서버의 기본 바인드는 `127.0.0.1`이다. Linux 브리지 컨테이너에서 포트를 전달할 경우 컨테이너의 앱에는 `--bind 0.0.0.0`을, Docker 호스트에는 `127.0.0.1:8765:8765` 포트 매핑을 사용한다. Linux 호스트 네트워크로 DDS를 사용할 경우 실제 NIC와 기존 도메인을 확인한다.
+브라우저 서버는 호스트 네트워크의 `127.0.0.1:8765`에서만 수신한다. PC2의 SSH 포트 포워딩으로 GUI에 접속한다. 실기 기록은 `inspect --run "$RUN_ID"`로 읽고 `source=unitree`와 실제 수신률을 확인한다.
 
 ## 기록 필드
 
