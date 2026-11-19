@@ -53,8 +53,6 @@ def _fixture(args):
 
 
 def _record(args):
-    if bool(args.width) != bool(args.height):
-        raise ValueError("--width and --height must be given together")
     calibration = read_json(args.calibration) if args.calibration else None
     metadata = _metadata("realsense", "host_monotonic_ns")
     with create_part(args.runs_dir, args.run, "depth", metadata) as path:
@@ -126,6 +124,8 @@ def _replay(args):
     return {
         "part": str(path),
         "source": metadata["source"],
+        "camera_model": metadata.get("model"),
+        "encoding": metadata.get("encoding"),
         "frame_count": count,
         "clock_domain": metadata["clock_domain"],
         "width": intrinsics["width"],
@@ -163,8 +163,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     fixture = commands.add_parser("fixture", help="write a synthetic staircase run")
-    probe = commands.add_parser("probe", help="enumerate native Z16 profiles without streaming")
-    record = commands.add_parser("record", help="start a RealSense depth stream and record it")
+    probe = commands.add_parser("probe", help="check for the G1's D435i and list its Z16 profiles")
+    record = commands.add_parser("record", help="record D435i depth; G1 guide default: 640x480 at 60 Hz Z16")
     replay = commands.add_parser("replay", help="validate and summarize every stored frame")
     for command in (fixture, probe, record, replay):
         command.add_argument("--runs-dir", type=Path, default=Path("runs"))
@@ -175,9 +175,10 @@ def main(argv=None):
     for command in (probe, record):
         command.add_argument("--source", choices=("realsense",), default="realsense")
     record.add_argument("--device-index", type=_int_at_least(0))
-    record.add_argument("--width", type=_int_at_least(0), default=0)
-    record.add_argument("--height", type=_int_at_least(0), default=0)
-    record.add_argument("--fps", type=_int_at_least(0), default=0)
+    width, height, fps = realsense.G1_DEPTH_PROFILE
+    record.add_argument("--width", type=_int_at_least(1), default=width)
+    record.add_argument("--height", type=_int_at_least(1), default=height)
+    record.add_argument("--fps", type=_int_at_least(1), default=fps)
     record.add_argument("--seconds", type=_positive, default=10.0)
     record.add_argument("--calibration", type=Path)
     probe.set_defaults(action=lambda _: realsense.probe())

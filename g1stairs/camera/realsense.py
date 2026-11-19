@@ -1,10 +1,15 @@
-"""Read-only RealSense depth adapter, loaded only for hardware CLI commands."""
+"""Head-mounted RealSense D435i depth input from the Unitree G1 Development Guide."""
 
 import math
+import re
 import sys
 import time
 
 import numpy as np
+
+
+G1_HEAD_MODEL = "D435i"
+G1_DEPTH_PROFILE = (640, 480, 60)
 
 
 class CameraError(RuntimeError):
@@ -34,6 +39,25 @@ def _devices(context):
     return devices
 
 
+def _is_g1_head_camera(model):
+    return bool(model and re.search(r"\bD435I\b", model, re.IGNORECASE))
+
+
+def _depth_profiles(rs, device):
+    return {
+        (video.width(), video.height(), video.fps())
+        for sensor in device.query_sensors()
+        for profile in sensor.get_stream_profiles()
+        if profile.stream_type() == rs.stream.depth and profile.format() == rs.format.z16
+        for video in (profile.as_video_stream_profile(),)
+    }
+
+
+def _describe_profile(profile):
+    width, height, fps = profile
+    return {"width": width, "height": height, "fps": fps}
+
+
 def probe():
     """Read device capabilities without starting any stream."""
     rs = _sdk()
@@ -41,23 +65,26 @@ def probe():
     try:
         context = rs.context()
         for index, device in enumerate(_devices(context)):
-            profiles = {
-                (video.width(), video.height(), video.fps())
-                for sensor in device.query_sensors()
-                for profile in sensor.get_stream_profiles()
-                if profile.stream_type() == rs.stream.depth and profile.format() == rs.format.z16
-                for video in (profile.as_video_stream_profile(),)
-            }
+            model = _device_info(device, rs.camera_info.name)
+            profiles = _depth_profiles(rs, device)
             results.append({
                 "device_index": index,
-                "model": _device_info(device, rs.camera_info.name),
-                "z16_profiles": [{"width": w, "height": h, "fps": fps} for w, h, fps in sorted(profiles)],
+                "model": model,
+                "matches_g1_head_model": _is_g1_head_camera(model),
+                "supports_guide_depth_profile": G1_DEPTH_PROFILE in profiles,
+                "z16_profiles": [_describe_profile(profile) for profile in sorted(profiles)],
             })
     except CameraError:
         raise
     except RuntimeError as exc:
         raise _classify(exc, "PROBE_FAILED") from exc
-    return {"source": "realsense", "devices": results, "stream_started": False}
+    return {
+        "source": "realsense",
+        "guide_camera_model": G1_HEAD_MODEL,
+        "guide_depth_profile": dict(_describe_profile(G1_DEPTH_PROFILE), encoding="Z16"),
+        "devices": results,
+        "stream_started": False,
+    }
 
 
 def _classify(exc, fallback):
@@ -74,37 +101,54 @@ def _classify(exc, fallback):
 
 def _select_device(rs, context, config, device_index):
     devices = _devices(context)
+    models = [_device_info(device, rs.camera_info.name) for device in devices]
     if device_index is None:
-        if len(devices) != 1:
-            raise CameraError("DEVICE_AMBIGUOUS: run probe and pass --device-index")
-        device_index = 0
-    if not 0 <= device_index < len(devices):
+        matches = [index for index, model in enumerate(models) if _is_g1_head_camera(model)]
+        if not matches:
+            raise CameraError(f"DEVICE_MODEL_MISMATCH: expected {G1_HEAD_MODEL}; detected {models}")
+        if len(matches) > 1:
+            raise CameraError("DEVICE_AMBIGUOUS: multiple D435i cameras; run probe and pass --device-index")
+        device_index = matches[0]
+    elif not 0 <= device_index < len(devices):
         raise CameraError("DEVICE_NOT_VISIBLE: selected device index is unavailable")
+    model = models[device_index]
+    if not _is_g1_head_camera(model):
+        raise CameraError(f"DEVICE_MODEL_MISMATCH: expected {G1_HEAD_MODEL}; selected {model!r}")
     device = devices[device_index]
     serial = _device_info(device, rs.camera_info.serial_number)
     if serial is not None:
         config.enable_device(serial)
     elif len(devices) > 1:
         raise CameraError("DEVICE_AMBIGUOUS: SDK cannot resolve the selected device")
-    return _device_info(device, rs.camera_info.name)
+    return device, model
 
 
 def record(seconds, width, height, fps, device_index, write_frame, metadata):
-    """Start one Z16 stream for an explicitly requested recording window."""
+    """Start a supported D435i Z16 stream for an explicitly requested recording window."""
     rs = _sdk()
     active = False
     try:
         context = rs.context()
-        pipeline = rs.pipeline(context)
         config = rs.config()
-        model = _select_device(rs, context, config, device_index)
+        device, model = _select_device(rs, context, config, device_index)
+        requested_profile = (width, height, fps)
+        if requested_profile not in _depth_profiles(rs, device):
+            raise CameraError(
+                f"DEPTH_PROFILE_UNSUPPORTED: {model} does not report {width}x{height} at {fps} Hz Z16; "
+                "run probe and choose a listed profile with --width, --height and --fps"
+            )
+        pipeline = rs.pipeline(context)
         config.enable_stream(rs.stream.depth, width, height, rs.format.z16, fps)
         pipeline_profile = pipeline.start(config)
         active = True
         profile = pipeline_profile.get_stream(rs.stream.depth).as_video_stream_profile()
         intr = profile.get_intrinsics()
+        actual_profile = (intr.width, intr.height, profile.fps())
+        if actual_profile != requested_profile or profile.format() != rs.format.z16:
+            raise CameraError("DEPTH_PROFILE_MISMATCH: active depth profile differs from the request")
         metadata.update(
-            model=model, fps=profile.fps(),
+            model=model, guide_camera_model=G1_HEAD_MODEL, fps=actual_profile[2],
+            requested_depth_profile=_describe_profile(requested_profile),
             intrinsics={
                 "width": intr.width, "height": intr.height, "fx": intr.fx, "fy": intr.fy,
                 "cx": intr.ppx, "cy": intr.ppy, "distortion": _enum_name(intr.model),

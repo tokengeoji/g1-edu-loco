@@ -1,6 +1,6 @@
 # G1 EDU 전신 상태와 온도
 
-Unitree Python SDK2에서 `unitree_hg/msg/dds_/LowState_` 타입의 `rt/lowstate`를 읽는다. 브라우저로 실시간 확인하거나 JSONL 기록을 열어 샘플을 탐색할 수 있다.
+Unitree Python SDK2에서 `unitree_hg/msg/dds_/LowState_` 타입의 `rt/lowstate`를 읽는다. 브라우저로 실시간 확인하거나 JSONL 기록을 열어 샘플을 탐색할 수 있다. 아래 Python 명령은 PC2의 `jsj-monitor` Docker 컨테이너 내부 `/opt/g1-edu-loco`에서 실행한다. [공식 Basic Motion Routine](https://support.unitree.com/home/en/G1_developer/basic_motion_routine)
 
 ## 합성 데이터로 확인
 

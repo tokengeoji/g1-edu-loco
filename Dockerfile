@@ -1,15 +1,14 @@
-FROM python:3.10-slim-bookworm
+FROM jsj-g1-base:foxy
 
-ARG INSTALL_REALSENSE=0
+ARG G1_LOCO_BRANCH=main
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
-WORKDIR /app
+WORKDIR /opt/g1-edu-loco
 
-COPY requirements.txt ./
-RUN python -m pip install --no-cache-dir -r requirements.txt
-RUN if [ "$INSTALL_REALSENSE" = "1" ]; then \
-        apt-get update && apt-get install -y --no-install-recommends libusb-1.0-0 libudev1 \
-        && rm -rf /var/lib/apt/lists/* \
-        && python -m pip install --no-cache-dir --only-binary=:all: pyrealsense2==2.56.5.9235; \
-    fi
+RUN . /etc/os-release \
+    && test "$ID" = ubuntu && test "$VERSION_ID" = 20.04 \
+    && test -f /opt/ros/foxy/setup.bash \
+    && python3 -c 'import sys, numpy; assert sys.version_info[:2] == (3, 8)' \
+    && git clone --depth 1 --branch "$G1_LOCO_BRANCH" https://github.com/tokengeoji/g1-edu-loco.git . \
+    && git rev-parse HEAD
 
-COPY g1stairs/ ./g1stairs/
+CMD ["sleep", "infinity"]
