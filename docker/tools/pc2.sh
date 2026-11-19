@@ -37,7 +37,7 @@ print_create_command() {
   printf '%s\n' '아래 Docker 명령을 G1 PC2 호스트에서 실행하세요.' >&2
   printf '%q ' docker create --name jsj-g1-tools --pull never --init --runtime=runc --network host \
     --cap-drop ALL --security-opt no-new-privileges:true --log-driver none \
-    "${devices[@]}" jsj-g1-tools:foxy
+    "${devices[@]}" g1-jsj:base
   printf '&& docker start jsj-g1-tools\n'
 }
 

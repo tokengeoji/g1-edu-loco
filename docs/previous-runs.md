@@ -1,29 +1,40 @@
 <!-- Author: Codex (IIC) -->
 # PC2에서 기존 컨테이너와 실험 기록 보관하기
 
-운영 컨테이너를 다시 켜려면 G1 PC2 호스트에서 `docker start jsj-g1-tools`를 쓴다. 같은 컨테이너의 `/workspace/runs`가 그대로 열린다. 이미지나 USB 장치 구성을 바꿔 새 컨테이너가 필요한 경우에만 아래 교체 절차를 따른다.
+현재 운영 이미지는 `g1-jsj:base`, 컨테이너 이름은 `jsj-g1-tools`다. 이전 설치에는 같은 `g1-jsj:base` 태그의 SDK 전용 이미지와 운영 이미지 `jsj-g1-tools:foxy`가 있을 수 있다. 기체에서 기록한 `/workspace/runs`는 해당 컨테이너의 쓰기 레이어에 남는다.
 
 ## G1 호스트에서 기존 이미지와 컨테이너 보관
 
-PC2의 SSH 터미널에서 본인의 컨테이너와 사용 중인 이미지 ID를 조회한다.
+PC2의 SSH 터미널에서 기존 컨테이너와 이미지 태그를 확인한다.
 
 **G1 호스트**
 
 ```bash
 docker ps -a --format '{{.Names}}  {{.Image}}  {{.Status}}'
 docker image ls --no-trunc
-docker container inspect jsj-g1-tools --format '{{.Config.Image}}  {{.Image}}  {{index .Config.Labels "org.iic.g1.role"}}'
 ```
 
-대상이 본인의 `jsj-g1-tools`이고 역할이 `operator-tools`인지 확인한다. 아래 보관 이름 `jsj-g1-tools:saved-01`과 `jsj-g1-tools-saved-01` 중 이미 쓰는 이름이 있으면 새 번호를 정한다. `IMAGE_ID`를 방금 컨테이너 검사에서 출력한 두 번째 값(`sha256:…`)으로 바꾸면 현재 컨테이너가 실제로 사용하는 이미지에 보관 태그가 생긴다.
+처음 설치하고 같은 이름의 이미지·컨테이너가 없으면 [단일 이미지 빌드와 컨테이너 생성](../README.md#pc2)으로 이동한다. 목록에 있는 이름에 대해서만 다음 명령을 실행한다. 컨테이너 검사 결과에는 생성할 때 지정한 태그, 실제로 사용 중인 이미지 ID, 역할, 실행 상태가 차례로 나온다.
 
 **G1 호스트**
 
 ```bash
-docker image tag IMAGE_ID jsj-g1-tools:saved-01
+docker image inspect g1-jsj:base --format '{{.Id}}  {{with .Config.Labels}}{{index . "org.iic.g1.role"}}{{end}}'
+docker container inspect jsj-g1-tools --format '{{.Config.Image}}  {{.Image}}  {{with .Config.Labels}}{{index . "org.iic.g1.role"}}{{end}}  {{.State.Status}}'
 ```
 
-먼저 새 이미지를 빌드한다. 빌드에 성공하면 이전 컨테이너에서 텔레옵을 종료하고 녹화·분석 결과가 모두 기록된 것을 확인한 후 기존 컨테이너 이름을 옮긴다. 쓰기 레이어에 있던 데이터도 이 보관본에 남는다.
+컨테이너가 참조하지 않는 구형 SDK 이미지를 그대로 다시 쓸 계획이라면, 빌드 전에 해당 이미지 ID의 별도 보관 여부를 결정한다. 재빌드에 성공하면 `g1-jsj:base` 태그는 새 ID를 가리킨다.
+
+| 확인 결과 | 다음 동작 |
+| --- | --- |
+| 본인의 `jsj-g1-tools`가 역할 `operator-tools`이고 원하는 이미지 ID·USB 구성과 일치 | 실행 중이면 그대로 접속한다. 정지 상태라면 G1 호스트에서 `docker start jsj-g1-tools`를 실행한다. 기존 기록을 같은 경로에서 사용할 수 있다. |
+| 본인의 `g1-jsj:base`를 새 버전으로 갱신 | [단일 빌드 명령](../docker/base/README.md)을 실행한다. 이전 SDK 전용 이미지는 역할이 비어 있을 수 있다. |
+| 본인의 운영 컨테이너를 교체 | 생성 당시 태그는 `jsj-g1-tools:foxy` 또는 `g1-jsj:base`일 수 있다. 역할 `operator-tools`와 실제 이미지 ID를 확인하고 아래 순서로 보관한다. |
+| 소유자가 불명확하거나 컨테이너 역할이 예상과 다름 | 기존 이름과 데이터를 보존하고 소유자·구성을 확인한다. |
+
+새 `g1-jsj:base`의 이미지 ID와 `operator-tools` 역할을 확인한다. 이전 `jsj-g1-tools:foxy` 태그는 기존 이미지에 남고, 컨테이너는 정지하거나 이름을 바꿔도 생성 당시의 이미지 ID를 계속 참조한다.
+
+기존 컨테이너에 새 이미지 또는 USB 구성을 적용할 때만 본인의 텔레옵과 녹화를 종료하고 결과가 모두 기록됐는지 확인한다. 아래 보관용 이름이 이미 사용 중이면 사용하지 않는 새 번호를 정한다. 이미 정지 상태라면 둘째 줄만 실행한다.
 
 **G1 호스트**
 
@@ -32,7 +43,7 @@ docker stop jsj-g1-tools
 docker rename jsj-g1-tools jsj-g1-tools-saved-01
 ```
 
-운영 절차에 따라 새 `jsj-g1-tools`를 생성한다. 보관본은 정지 상태로 두어도 기록을 복사할 수 있다. [통합 이미지 빌드 및 시작](../README.md#pc2)
+새 `g1-jsj:base`에서 같은 이름의 `jsj-g1-tools`를 생성·시작한다. 위의 컨테이너 검사 명령으로 실제 이미지 ID가 새 빌드의 ID와 일치하는지 확인한다. 이미 보관한 `jsj-g1-tools-saved-01`에는 기존 쓰기 레이어와 실험 기록이 남아 있어 정지 상태에서도 복사할 수 있다. [컨테이너 생성과 시작](../README.md#pc2)
 
 ## 완료된 실험 한 건 가져오기
 

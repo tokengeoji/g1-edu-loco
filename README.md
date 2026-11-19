@@ -1,7 +1,11 @@
 <!-- Author: Codex (IIC) -->
 # G1-EDU PC2 운영 도구
 
-배터리·모터 온도 확인, 키보드 텔레옵, 헤드 RealSense D435i 설정·기록, 계단 치수 계산을 PC2의 **`jsj-g1-tools` 컨테이너 하나**에서 실행한다. 맥북에서는 작업하지 않는다. G1에서 연 각 터미널은 같은 컨테이너와 실험 데이터를 사용한다. 텔레옵은 로봇에 탑재된 Unitree 보행기에 명령을 보낸다. 연구용 보행 정책의 학습·실행과 관절 저수준 제어는 별도 작업이다. [IIC 작업 규칙](AGENTS.md)
+G1-EDU PC2에서 CPU 이미지 **`g1-jsj:base`**를 한 번 빌드하면 Ubuntu·ROS 2·공식 SDK와 운영 도구가 함께 설치된다. **`jsj-g1-tools`**는 이 이미지로 생성하는 컨테이너 이름이다. 각 G1 터미널에서 같은 컨테이너에 접속해 배터리·모터 온도, 키보드 텔레옵, RealSense D435i와 계단 치수를 확인한다. 텔레옵은 기체의 Unitree 고수준 보행기에 명령을 보낸다. [IIC 작업 규칙](AGENTS.md)
+
+**처음 키보드를 연결한다면 [로봇을 움직이기 전 텔레옵 점검](docs/teleop-preflight.md)을 따른다.** 실제 모터·보행 상태를 읽고 방향키와 정지를 모의 입력하는 현장 절차다.
+
+[이미지 빌드](#pc2) · [컨테이너 생성](#create) · [온도·텔레옵](#monitoring) · [카메라](#camera) · [계단 계산](#geometry) · [재개·기록 보관](#resume)
 
 | 실행 위치 | 입력할 명령 |
 | --- | --- |
@@ -12,33 +16,32 @@
 
 ## PC2에서 이미지 빌드
 
-G1-EDU PC2의 호스트 터미널에서 아래 한 줄을 실행하면 공통 이미지 **`g1-jsj:base`**가 만들어진다. 처음 빌드할 때 Docker가 공개 Git 브랜치와 Canonical의 Ubuntu 20.04 ARM64 루트 파일시스템을 가져온다. PC2 호스트 체크아웃, 로컬 부모 이미지, Docker 로그인이나 이미지 pull은 필요 없다. [베이스 구성과 버전 확인](docker/base/README.md)
+최초 설치와 업데이트에 같은 명령을 사용한다. G1-EDU PC2의 Docker가 공개 Git 브랜치를 빌드 컨텍스트로 가져오고, 최초 빌드에서 Canonical의 Ubuntu 20.04 ARM64 루트 파일시스템을 준비한다. 맥북 작업, PC2 호스트 체크아웃, Docker 로그인이나 이미지 pull은 필요 없다. [이미지 구성과 버전 확인](docker/base/README.md)
 
-**G1 호스트 · 공통 CPU 이미지 빌드**
+**G1 호스트 · 운영 도구까지 포함한 이미지 빌드**
 
 ```bash
 docker build --pull=false --platform linux/arm64 -f docker/base/Dockerfile -t g1-jsj:base 'https://github.com/tokengeoji/g1-edu-loco.git#jsj'
 ```
 
-공통 베이스를 준비한 뒤 통합 이미지를 빌드한다. 업데이트할 때도 같은 명령으로 공개 Git 소스의 변경을 가져온다. 실행 중인 컨테이너에 새 이미지를 적용하는 방법은 [기존 기록 보관](#resume)을 참고한다.
-
-**G1 호스트 · 통합 도구 이미지 빌드와 기존 컨테이너 확인**
+**G1 호스트 · 기존 컨테이너 확인**
 
 ```bash
-docker build --pull=false --platform linux/arm64 -f docker/tools/Dockerfile -t jsj-g1-tools:foxy 'https://github.com/tokengeoji/g1-edu-loco.git#jsj'
-docker ps -a --filter name=jsj-g1-tools
+docker ps -a --filter 'name=^/jsj-g1-tools$'
 ```
+
+<a id="create"></a>
 
 ## 컨테이너 생성과 시작
 
-같은 이름이 이미 있으면 소유한 컨테이너인지 확인하고 [기존 컨테이너 재개](#resume)로 이동한다. 첫 생성은 카메라 연결 방식에 따라 다음 중 하나를 고른다.
+위 목록에 `jsj-g1-tools`가 있으면 [이미지 ID 확인과 기존 컨테이너 재개·교체](#resume)를 따른다. 이름이 비어 있으면 카메라 연결 방식에 따라 다음 중 하나를 고른다.
 
 **로봇 네트워크의 ROS 2·DDS 카메라**를 쓸 때는 아래와 같이 생성한다. 이 구성에서 온도, 텔레옵, 카메라 토픽 탐색, 계단 계산을 모두 실행할 수 있다.
 
 **G1 호스트 · 네트워크 카메라 구성으로 처음 생성**
 
 ```bash
-docker create --name jsj-g1-tools --pull never --init --runtime=runc --network host --cap-drop ALL --security-opt no-new-privileges:true --log-driver none jsj-g1-tools:foxy && docker start jsj-g1-tools
+docker create --name jsj-g1-tools --pull never --init --runtime=runc --network host --cap-drop ALL --security-opt no-new-privileges:true --log-driver none g1-jsj:base && docker start jsj-g1-tools
 ```
 
 **PC2에 USB로 직접 연결한 D435i**에서 촬영하려면 카메라를 연결한 뒤 아래 명령을 먼저 실행한다. 출력에 표시된 D435i 장치 경로를 확인하고, 도구가 출력한 Docker 생성·시작 명령을 G1 호스트에 입력한다. 이렇게 생성한 컨테이너에서도 ROS 2·DDS 탐색과 나머지 기능을 함께 사용한다.
@@ -46,7 +49,7 @@ docker create --name jsj-g1-tools --pull never --init --runtime=runc --network h
 **G1 호스트 · USB 카메라 구성으로 처음 생성**
 
 ```bash
-docker run --pull never --rm --runtime=runc --network none --cap-drop ALL --security-opt no-new-privileges:true --entrypoint /usr/local/bin/g1-pc2-create-command jsj-g1-tools:foxy
+docker run --pull never --rm --runtime=runc --network none --cap-drop ALL --security-opt no-new-privileges:true --entrypoint /usr/local/bin/g1-pc2-create-command g1-jsj:base
 ```
 
 <a id="shell"></a>
@@ -237,9 +240,9 @@ head -n 1 "/workspace/runs/$RUN_ID/geometry/stairs.jsonl"
 | [src/g1stairs/monitoring](src/g1stairs/monitoring/) | Unitree SDK2 Python 상태 구독, 기록, 웹 대시보드 |
 | [src/g1stairs/camera](src/g1stairs/camera/) | USB는 RealSense SDK 2.0(`pyrealsense2`), ROS 영상은 Foxy `rclpy`와 `sensor_msgs`, DDS 진단은 Eclipse Cyclone DDS. [Unitree 카메라 가이드](https://support.unitree.com/home/en/G1_developer/depth_camera_instruction) · [ROS 2 CameraInfo](https://github.com/ros2/common_interfaces/blob/foxy/sensor_msgs/msg/CameraInfo.msg) |
 | [src/g1stairs/geometry](src/g1stairs/geometry/) | 공식 RealSense SDK의 역투영으로 미터 단위 3D 좌표를 구한 뒤, 프로젝트 알고리즘이 수평면과 관측된 경계를 찾아 계단 치수를 계산한다. [RealSense 좌표 변환](https://github.com/realsenseai/librealsense/wiki/Projection-in-RealSense-SDK-2.0) |
-| [config](config/) · [docker/base](docker/base/) · [docker/tools](docker/tools/) | 보정 형식, 공통 SDK 환경, 단일 실행 이미지·시작 스크립트 |
+| [config](config/) · [docker/base](docker/base/) · [docker/tools](docker/tools/) | 보정 형식, 전체 운영 이미지를 빌드하는 Dockerfile, CLI·USB 장치 선택 스크립트 |
 
-공통 베이스는 공식 C++ SDK `aaf69cb`, Python SDK `814556d`, Unitree ROS 2 메시지 `668d1ec`, Foxy Cyclone RMW `c12abc5`와 Cyclone DDS `0.10.2`를 사용한다. 통합 이미지는 RealSense Python SDK `2.54.1.5217`의 ARM64 배포 파일을 해시로 확인한다. [Unitree ROS 2](https://github.com/unitreerobotics/unitree_ros2/tree/668d1ec5a05d1c38d3306bdca7d59f2ba3581a88) · [Cyclone DDS](https://github.com/eclipse-cyclonedds/cyclonedds/tree/0.10.2)
+`g1-jsj:base`에는 공식 C++ SDK `aaf69cb`, Python SDK `814556d`, Unitree ROS 2 메시지 `668d1ec`, Foxy Cyclone RMW `c12abc5`와 Cyclone DDS `0.10.2`가 들어간다. 빌드할 때 RealSense Python SDK `2.54.1.5217`의 ARM64 배포 파일을 해시로 확인한다. [Unitree ROS 2](https://github.com/unitreerobotics/unitree_ros2/tree/668d1ec5a05d1c38d3306bdca7d59f2ba3581a88) · [Cyclone DDS](https://github.com/eclipse-cyclonedds/cyclonedds/tree/0.10.2)
 
 PC2에서 이미지 설치 후 회귀 테스트는 아래 명령으로 실행한다. 테스트는 실제 보행 명령을 보내지 않는다. 물리 카메라 수신 여부와 계단 치수 정확도는 해당 기체의 프레임과 계단 실측으로 확인한다.
 
@@ -251,7 +254,35 @@ python3 -m unittest discover -s /opt/g1-tools -t /opt/g1-tools
 
 <a id="resume"></a>
 
-## 종료와 기존 데이터
+## 기존 컨테이너 재개와 기록 보관
+
+다음 실험을 재개하거나 이미지를 새로 빌드했다면 먼저 확인한다. 컨테이너는 생성 당시의 이미지 ID를 계속 사용한다.
+
+**G1 호스트 · 현재 이미지 ID와 기존 컨테이너의 실제 이미지 ID 비교**
+
+```bash
+docker image inspect --format '{{.Id}}' g1-jsj:base
+docker container inspect --format '{{.Image}} {{.Name}} {{.Config.Image}} {{index .Config.Labels "org.iic.g1.role"}} {{.State.Status}}' jsj-g1-tools
+```
+
+두 줄의 첫 번째 값(`sha256:…`)이 같고, 두 번째 줄이 본인의 `/jsj-g1-tools`, `g1-jsj:base`, `operator-tools`이면 이어서 사용한다. ID가 다르거나 예전 `jsj-g1-tools:foxy`로 만든 컨테이너면 먼저 기존 기록을 보관한 뒤 새 이미지로 다시 생성한다. [기존 실험 보관·가져오기](docs/previous-runs.md)
+
+**G1 호스트 · 확인한 컨테이너 재개** (상태가 `running`이면 둘째 줄만 입력)
+
+```bash
+docker start jsj-g1-tools
+docker exec -it jsj-g1-tools bash
+```
+
+**컨테이너 내부 · 보관된 실험 이름 확인**
+
+```bash
+ls /workspace/runs
+```
+
+같은 컨테이너를 다시 시작하면 쓰기 레이어의 기록이 유지된다. **새 이미지나 변경된 USB 장치 경로로 다시 생성할 때**는 기존 컨테이너를 보관하고 새 컨테이너로 필요한 기록을 가져온다. 이전 기능별 컨테이너에 남은 기록도 이 절차로 가져올 수 있다. [기존 실험 보관·가져오기](docs/previous-runs.md)
+
+### 실험 종료
 
 텔레옵에서 `Space`로 속도 0을 요청하고 `x`로 종료한다. 카메라와 상태 녹화가 끝났는지 확인하고 열어 둔 뷰어나 모니터는 각 터미널에서 Ctrl+C로 끝낸다.
 
@@ -266,26 +297,3 @@ exit
 ```bash
 docker stop jsj-g1-tools
 ```
-
-다음 실험에서 재개하기 전에 본인이 만든 `jsj-g1-tools:foxy`, 역할 `operator-tools`인 컨테이너인지 확인한다.
-
-**G1 호스트 · 재개할 컨테이너와 상태 확인**
-
-```bash
-docker container inspect --format '{{.Name}} {{.Config.Image}} {{index .Config.Labels "org.iic.g1.role"}} {{.State.Status}}' jsj-g1-tools
-```
-
-**G1 호스트 · 정지된 내 컨테이너 시작 후 내부 셸 열기** (이미 실행 중이면 둘째 줄만 입력)
-
-```bash
-docker start jsj-g1-tools
-docker exec -it jsj-g1-tools bash
-```
-
-**컨테이너 내부 · 보관된 실험 이름 확인**
-
-```bash
-ls /workspace/runs
-```
-
-같은 컨테이너를 다시 시작하면 쓰기 레이어의 기록이 유지된다. **새 이미지나 변경된 USB 장치 경로로 다시 생성할 때**는 기존 컨테이너를 보관하고 새 컨테이너로 필요한 기록을 가져온다. 이전 기능별 컨테이너에 남은 기록도 이 절차로 가져올 수 있다. [기존 실험 보관·가져오기](docs/previous-runs.md)
