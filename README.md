@@ -7,17 +7,10 @@
 
 ## PC2에서 이미지 빌드
 
-G1-EDU PC2에 SSH로 접속한 상태에서 아래 Docker 명령을 실행한다. Docker Engine이 공개 Git 브랜치를 빌드 컨텍스트로 가져온다. 맥북 작업, PC2 호스트 체크아웃, Docker 로그인은 필요 없다.
+G1-EDU PC2에 SSH로 접속한 뒤 아래 한 줄을 실행하면 공통 이미지 **`g1-jsj:base`**가 만들어진다. 처음 빌드할 때 Docker가 공개 Git 브랜치와 Canonical의 Ubuntu 20.04 ARM64 루트 파일시스템을 가져온다. 맥북 작업, PC2 호스트 체크아웃, 로컬 부모 이미지, Docker 로그인이나 이미지 pull은 필요 없다. [베이스 구성과 버전 확인](docker/base/README.md)
 
 ```bash
-docker image ls
-```
-
-**`g1-jsj:base`가 이미 있으면** 아래 통합 이미지 빌드부터 진행한다. **처음 설치하고 로컬 Ubuntu 부모 이미지도 없으면** Canonical의 Ubuntu 20.04 ARM64 루트 파일시스템을 가져와 공통 베이스를 빌드한다. 기존 로컬 Ubuntu 태그를 활용하는 경우는 [베이스 빌드 안내](docker/base/README.md)를 따른다.
-
-```bash
-docker import --change 'CMD ["/bin/bash"]' 'https://partner-images.canonical.com/oci/focal/20250530.1/ubuntu-focal-oci-arm64-root.tar.gz' jsj-ubuntu:20.04
-docker build --pull=false --platform linux/arm64 --build-arg BASE_IMAGE=jsj-ubuntu:20.04 -f docker/base/Dockerfile -t g1-jsj:base 'https://github.com/tokengeoji/g1-edu-loco.git#jsj'
+docker build --pull=false --platform linux/arm64 -f docker/base/Dockerfile -t g1-jsj:base 'https://github.com/tokengeoji/g1-edu-loco.git#jsj'
 ```
 
 공통 베이스를 준비한 뒤 통합 이미지를 빌드한다. 업데이트할 때도 같은 명령으로 공개 Git 소스의 변경을 가져온다. 실행 중인 컨테이너에 새 이미지를 적용하는 방법은 [기존 기록 보관](#resume)을 참고한다.

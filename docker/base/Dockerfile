@@ -1,4 +1,20 @@
-ARG BASE_IMAGE=jsj-ubuntu:20.04
+# Author: Codex (IIC)
+ARG BASE_IMAGE=ubuntu_rootfs
+FROM scratch AS unpacker
+# The pinned Docker Official Images submodule supplies the ARM64 tar utility.
+# Classic Docker expands a local tarball but leaves a remote ADD compressed.
+ADD docker/base/ubuntu-bootstrap/latest-1/musl/arm64v8/rootfs.tar.gz /
+ADD https://partner-images.canonical.com/oci/focal/20250530.1/ubuntu-focal-oci-arm64-root.tar.gz /ubuntu-rootfs.tar.gz
+ENV PATH=/bin
+RUN set -eu; \
+    echo 'fcd7f696f7a5f98e60b4e5a71869525ce185c8b3766d77be3388603e3e5083c7  /ubuntu-rootfs.tar.gz' | sha256sum -c -; \
+    mkdir /ubuntu; \
+    tar --numeric-owner -xzpf /ubuntu-rootfs.tar.gz -C /ubuntu
+
+FROM scratch AS ubuntu_rootfs
+COPY --from=unpacker /ubuntu/ /
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 FROM ${BASE_IMAGE}
 
 USER root

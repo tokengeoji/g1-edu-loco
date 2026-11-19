@@ -1,0 +1,4 @@
+[submodule "docker/base/ubuntu-bootstrap"]
+	path = docker/base/ubuntu-bootstrap
+	url = https://github.com/docker-library/busybox.git
+	shallow = true
