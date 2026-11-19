@@ -1,7 +1,0 @@
-{
-  "frame_id": "example_local_gravity_aligned",
-  "rotation": [[0, 0, 1], [-1, 0, 0], [0, -1, 0]],
-  "translation_m": [0, 0, 0.8],
-  "ground_z_m": 0,
-  "comment": "Example only. This maps optical axes to forward/left/up for a level camera at z=0.8 m. Use a measured calibration with the sensor and reference pose of the actual run."
-}

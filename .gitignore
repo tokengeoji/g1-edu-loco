@@ -1,9 +1,0 @@
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-.pytest_cache/
-runs/
-.env
-config/*
-!config/calibration.example.json
