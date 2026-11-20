@@ -39,6 +39,7 @@ docker exec -it jsj-g1-tools bash
 | `--preview --interface eth0 --domain 0` | 시작할 때 실제 FSM과 29개 관절의 위치·속도를 읽고, 관측한 FSM에서 키 입력을 모의 실행한다. 로봇 NIC가 필요하다. |
 | `--dry-run` | 기체와 통신하지 않고 모의 FSM 802에서 키를 직접 연습한다. 기본 실행 모드다. |
 | `--status --interface eth0 --domain 0` | 실제 FSM ID와 응답한 서비스, 서비스 API 버전, `GetFsmMode`의 정적·동적 상태를 표시하고 종료한다. |
+| `--feedback --interface eth0 --domain 0` | G1이 추정한 평면 위치, 속력, 회전속도를 0.25초마다 별도 터미널에 표시한다. 조종기와 SDK 조작을 같은 기준으로 비교할 수 있다. |
 | `--live --interface eth0 --domain 0` | 입력한 모드·이동·정지 명령을 실제 기체로 전송한다. 별도 세션에서 명시적으로 실행한다. |
 
 **컨테이너 내부 · 터미널 2 · 상태 수신 후 모의 키 입력**
@@ -58,7 +59,7 @@ g1 teleop --preview --interface eth0 --domain 0
 **컨테이너 내부 · 자동 검사를 다시 실행할 때**
 
 ```bash
-python3 -m unittest g1_teleop.test_control g1_teleop.test_terminal g1_teleop.test_preview g1_teleop.test_status
+python3 -m unittest g1_teleop.test_control g1_teleop.test_terminal g1_teleop.test_preview g1_teleop.test_status g1_teleop.test_feedback g1_teleop.test_services
 ```
 
 ### 실제 기체 조작
@@ -90,7 +91,7 @@ g1 teleop --live --interface eth0 --domain 0
 | `k` 또는 스페이스 / `Ctrl+C` | 속도 0 요청 후 조작 계속 / 최종 속도 0 요청의 결과를 표시하고 종료 |
 | `f` / `?` | 현재 세션의 FSM / 전체 모드·키 안내 |
 
-이동은 마지막으로 처리한 새 방향 입력부터 최대 1초 동안 유효하다. 계속 누르면 OS 키 반복 입력에 맞춰 갱신하며 같은 방향의 전송은 최대 10 Hz다. 키를 놓으면 입력 유효시간이 끝나면서 정지한다. 즉시 멈추려면 `k` 또는 스페이스를 누른다. 초기 속도에서 `q` 한 번 뒤 `i`는 전진 0.165 m/s를 요청한다.
+방향 키 한 번으로 최대 1초의 이동을 요청한다. 텔레옵은 그 안에서 최대 10 Hz로 현재 FSM을 재확인하고 `SetVelocity`를 전송한다. 각 호출에는 마지막 이동 입력에서 남은 시간만 넘긴다. 같은 키를 누르고 있으면 터미널이 보내는 키 반복이 입력 시간을 연장한다. 반복 입력이 들어오는지는 정지할 때 표시되는 이동 입력 횟수가 1보다 큰지로 확인한다. 속도 RPC는 키 한 번에도 여러 번 수락될 수 있다. 키를 놓으면 마지막 입력의 유효시간이 끝나면서 속도 0을 요청한다. 즉시 멈추려면 `k` 또는 스페이스를 누른다. 초기 속도에서 `q` 한 번 뒤 `i`는 전진 0.165 m/s를 요청한다.
 
 실기체 조작 화면에서 `Ctrl+C`를 누르면 추가 방향 입력을 중단하고 Unitree `SetVelocity(0, 0, 0)`를 요청한다. 마지막 이동 키의 유효시간이 이미 끝났어도 최종 정지 요청의 응답을 확인한다. 속도 0이 수락되면 이를 표시하고 종료한다. 통신 오류로 응답을 확인할 수 없으면 오류를 표시하고 실패 상태로 종료한다. 운용자는 현장에서 기체 동작을 확인해야 한다. 종료 시에는 현재 보행 모드에서 선속도와 회전속도를 0으로 요청한다.
 
@@ -122,7 +123,15 @@ g1 teleop --live --interface eth0 --domain 0
 | `[실기체] SetVelocity(7105) 수락 · FSM=802 · vx=0.150 …`인데 발걸음 없음 | 속도 명령을 보행 서비스가 수락했다. 정지한 뒤 아래의 읽기 전용 상태와 Unitree 앱의 기체 소프트웨어 버전을 기록한다. 물리 조종기에서 같은 모드로 걸었던 관측이 있다면 함께 비교한다. |
 | 이전 버전에서 키 입력이 곧바로 만료됨 | 구버전은 FSM 조회 시간도 0.25초 안에 차감했다. 격리한 DDS 서버의 조회 응답을 0.30초 지연시켰을 때, 구버전은 전진을 전송하지 않았다. 수정판은 같은 조건에서 약 0.69초 유효한 7105 전진 요청을 보냈고 `k` 입력에 속도 0을 전송했다. |
 
-연구실 PC2에서 `eth0`, 도메인 0, `sport`로 실제 FSM 802를 확인한 뒤 0.150 및 0.165 m/s 전진 요청과 이어지는 속도 0 요청이 수락됐다. 현장 관찰에서는 발걸음이 없었다. 같은 방향의 연속 요청은 화면에서 중복 출력을 생략하므로 이 기록만으로 키를 누른 시간을 판정할 수 없다.
+연구실 PC2에서 `eth0`, 도메인 0, `sport`로 실제 FSM 802를 확인한 뒤 0.150 및 0.165 m/s 전진 요청과 이어지는 속도 0 요청이 수락됐다. 현장 관찰에서는 발걸음이 없었다. 이때 사용한 버전은 새 키가 들어올 때만 7105를 전송했다. 현재 버전은 키 유효시간 동안 같은 명령을 주기적으로 전송하고, 정지 시 처리한 이동 입력 횟수와 성공한 속도 RPC 횟수를 따로 표시한다. Unitree XR 예제도 조이스틱을 주기적으로 읽어 `Move`를 호출한다. 10 Hz는 프로젝트의 전송 상한이다. 무응답 현상이 있었던 기체의 보행 결과는 현장 확인이 필요하다. [Unitree XR 조이스틱 입력 루프](https://github.com/unitreerobotics/xr_teleoperate/blob/main/teleop/teleop_hand_and_arm.py)
+
+**컨테이너 내부 · 별도 터미널에서 조종기와 SDK 보행 결과 비교**
+
+```bash
+g1 teleop --feedback --interface eth0 --domain 0
+```
+
+이 명령은 공식 `rt/odommodestate`의 위치·속도·회전속도를 구독한다. 시작 시 정지 상태의 값과 흔들림을 보고, 허가된 평지 실험에서 같은 FSM의 조종기 보행과 키보드 보행 때 표시되는 수평 속력과 시작점으로부터의 거리를 비교한다. 키보드에 표시되는 요청 속도는 기체 좌표 기준이고, 오도메트리의 x/y 위치는 월드 좌표 기준이다. 새 샘플이 없으면 대기 메시지가 나온다. 오도메트리에는 상태 추정 오차가 있으므로 기체의 실제 이동과 함께 확인한다. [Unitree G1 오도메트리](https://support.unitree.com/home/en/G1_developer/odometer_service_interface)
 
 **컨테이너 내부 · 읽기 전용 상태와 기체 형식 조회**
 
@@ -135,4 +144,4 @@ g1 monitor probe --nic eth0 --domain 0 | grep -oE '"mode_machine": *[0-9]+'
 
 `GetFsmId`는 선택된 FSM, `GetFsmMode`는 제어기가 보고한 정적(0)·동적(1) 상태다. `GetServerApiVersion`은 서비스 API 버전이며 기체 소프트웨어 버전은 Unitree 앱에서 확인한다. 속도 요청 수락과 정적·동적 값만으로 실제 변위를 판정할 수 없다. 필요한 경우 [상태 모니터](../g1stairs/monitoring/README.md)에서 실험 중 관절 `q/dq`를 기록해 현장 관찰과 대조한다.
 
-Unitree SDK 이슈에는 G1 EDU+ 소프트웨어 1.5.3에서 500으로 전환되지 않고, 802에서는 속도 요청 성공 뒤에도 기체가 서 있었다는 사용자 보고가 있다. 이 기체의 펌웨어와 명령 응답을 확인해야 같은 증상인지 판단할 수 있다. `501`은 허리 구성에 따른 별도 모드이고 자동 대체하지 않는다. 텔레옵은 저수준 모터 출력이나 제어권 전환을 수행하지 않는다. [유사 기체 보고 #170](https://github.com/unitreerobotics/unitree_sdk2_python/issues/170) · [Unitree 보행 서비스](https://support.unitree.com/home/en/G1_developer/sport_services_interface) · [이전 kmj 현장 기록](https://github.com/tokengeoji/g1-edu-loco/blob/2f8770ef004f9eca70c6ed1e72860514ed124bf8/docs/TROUBLESHOOTING.md#L18)
+Unitree SDK 이슈에는 G1 EDU+ 소프트웨어 1.5.3에서 500으로 전환되지 않고, 802에서는 속도 요청 성공 뒤에도 기체가 서 있었다는 사용자 보고가 있다. 이 기체의 펌웨어와 명령 응답을 확인해야 같은 증상인지 판단할 수 있다. 이 보고에서 SDK 보행이 된 대안은 3자유도 허리용 Regular(501)였다. **실제로 3자유도 허리가 활성화되어 있고 고정구·앱 잠금이 해제된 기체**에서만 `--live --waist-3dof`로 열어 8 → Enter로 501을 요청할 수 있다. 기체가 안정된 뒤 `f`에 501이 표시되는지 확인한다. 고정 허리 기체의 802에서 속도 요청이 계속 수락되면서 발걸음이 없으면, `--status` 출력·앱의 기체/ai_sport 버전·조종기와 SDK의 오도메트리 비교를 Unitree에 제공해 해당 펌웨어가 지원하는 외부 보행 입력을 확인한다. 텔레옵은 저수준 모터 출력이나 제어권 전환을 수행하지 않는다. [유사 기체 보고 #170](https://github.com/unitreerobotics/unitree_sdk2_python/issues/170) · [Unitree 보행 서비스](https://support.unitree.com/home/en/G1_developer/sport_services_interface) · [이전 kmj 현장 기록](https://github.com/tokengeoji/g1-edu-loco/blob/2f8770ef004f9eca70c6ed1e72860514ed124bf8/docs/TROUBLESHOOTING.md#L18)

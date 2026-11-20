@@ -72,7 +72,11 @@ class Controller:
         self.exit_requested = False
         self._last_move_sent = 0.0
         self._moving_key = None
+        self._motion_fsm = None
+        self._velocity = (0.0, 0.0, 0.0)
         self._motion_deadline = 0.0
+        self._input_count = 0
+        self._accepted_count = 0
         self._pending = None
         self._confirm_deadline = 0.0
         self._awaiting_fsm = None
@@ -102,6 +106,9 @@ class Controller:
         if force or self._moving_key:
             self._check("SetVelocity(0)", self.client.SetVelocity(0.0, 0.0, 0.0, PULSE_SECONDS))
         self._moving_key = None
+        summary = f" · 이동 입력 {self._input_count}회 · 속도 RPC 수락 {self._accepted_count}회" if self._input_count else ""
+        self._input_count = self._accepted_count = 0
+        return summary
 
     def _fault(self, error):
         self._pending = None
@@ -158,28 +165,43 @@ class Controller:
         if now >= deadline:
             self._stop()
             return "이동 입력 시간이 만료되었습니다. 키를 다시 누르세요."
-        repeated = key == self._moving_key
-        if repeated and now - self._last_move_sent < REPEAT_INTERVAL:
+        vx, vy, yaw = VELOCITY[key]
+        self._velocity = (vx * self.linear_scale, vy * self.linear_scale, yaw * self.turn_scale)
+        self._input_count += 1
+        if key == self._moving_key and now - self._last_move_sent < REPEAT_INTERVAL:
+            # Even a rate-limited fresh repeat renews the operator's input deadline.
+            self._motion_deadline = max(self._motion_deadline, deadline)
             return None
+        return self._send_velocity(key, deadline)
+
+    def _send_velocity(self, key, deadline, input_waiting=None):
         current = self._fsm()
         blocked = self._check_mode(current, GAIT_IDS, "이 기체의 이동 모드는 2 → Enter로 FSM 802를 선택하세요.")
         if blocked:
             self._stop()
             return blocked
+        if input_waiting is not None and current != self._motion_fsm:
+            self._stop()
+            return f"보행 모드가 FSM {current}로 바뀌어 속도 0을 요청했습니다."
         now = self.clock()
         duration = deadline - now
         if duration <= 0:
             self._stop()
             return "상태 조회 중 이동 입력 시간이 만료되었습니다. 키를 다시 누르세요."
+        # An operator key arriving during this timer-driven GET takes precedence.
+        if input_waiting is not None and input_waiting():
+            return None
+        repeated = key == self._moving_key
         # The request may reach the server even if the reply is lost.
         self._moving_key = key
+        self._motion_fsm = current
         self._motion_deadline = deadline
         self._last_move_sent = now
-        vx, vy, yaw = VELOCITY[key]
-        vx, vy, yaw = vx * self.linear_scale, vy * self.linear_scale, yaw * self.turn_scale
+        vx, vy, yaw = self._velocity
         if self.exit_requested:
             raise EndSession()
         self._check("SetVelocity(7105)", self.client.SetVelocity(vx, vy, yaw, duration))
+        self._accepted_count += 1
         if not repeated:
             return (f"SetVelocity(7105) 수락 · FSM={current} · "
                     f"vx={vx:.3f} vy={vy:.3f} m/s yaw={yaw:.3f} rad/s · {duration:.2f}초")
@@ -214,8 +236,8 @@ class Controller:
                 return None  # Key repeat neither confirms nor extends the deadline.
             previous, self._pending = self._pending, None
             if key in (" ", "k", "K"):
-                self._stop(force=True)
-                return "속도 0 요청 수락."
+                summary = self._stop(force=True)
+                return "속도 0 요청 수락." + summary
             if key == "f":
                 return self._status(self._fsm())
             if previous is not None and key not in MODES:
@@ -246,18 +268,24 @@ class Controller:
         except Exception as error:
             return self._fault(error)
 
-    def tick(self):
-        """Expire a pending action or stop on input timeout. Never resend motion."""
+    def tick(self, input_waiting=lambda: False):
+        """Refresh only the remaining input interval. None denotes no RPC or message."""
         now = self.clock()
         if self._pending is not None and now >= self._confirm_deadline:
             self._pending = None
             return "모드 선택 시간이 지났습니다."
-        if self._moving_key and now >= self._motion_deadline:
-            try:
-                self._stop()
-            except Exception as error:
-                return self._fault(error)
-            return "키 반복 입력 만료 · 속도 0 요청 수락."
+        if not self._moving_key:
+            return None
+        try:
+            if now >= self._motion_deadline:
+                summary = self._stop()
+                return "키 반복 입력 만료 · 속도 0 요청 수락." + summary
+            if now - self._last_move_sent >= REPEAT_INTERVAL and not input_waiting():
+                # A refresh never creates or extends an input deadline. The empty
+                # string marks a silent RPC so the TTY can reject stale queued keys.
+                return self._send_velocity(self._moving_key, self._motion_deadline, input_waiting) or ""
+        except Exception as error:
+            return self._fault(error)
         return None
 
     def close(self, *, force_stop=False):
@@ -269,8 +297,8 @@ class Controller:
         # zero command, with the SDK's existing finite timeout on both attempts.
         for attempt in range(2):
             try:
-                self._stop(force=True)
-                return "종료 정지 · 속도 0 요청 수락. 텔레옵을 종료했습니다."
+                summary = self._stop(force=True)
+                return "종료 정지 · 속도 0 요청 수락. 텔레옵을 종료했습니다." + summary
             except Exception as error:
                 if attempt == 1:
                     raise RuntimeError(

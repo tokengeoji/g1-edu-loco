@@ -156,10 +156,11 @@ RUN set -e; chmod 0755 /usr/local/bin/g1 /usr/local/bin/g1-pc2-create-command; m
     for tool in rviz2 Xvfb xvfb-run xauth xwininfo x11vnc websockify; do command -v "$tool" >/dev/null; done; \
     python3 -c 'from importlib.metadata import version; from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient; assert version("pyrealsense2") == "2.54.1.5217"'; \
     g1 monitor --help >/dev/null; g1 teleop --help >/dev/null; \
-    g1 camera --help >/dev/null; g1 stairs --help >/dev/null
+    g1 camera check --help >/dev/null; g1 stairs --help >/dev/null
 
 # Exercise the real input-to-command logic with local test doubles during the build.
-RUN python3 -m unittest -q g1_teleop.test_control g1_teleop.test_preview g1_teleop.test_status
+RUN python3 -m unittest -q g1_teleop.test_control g1_teleop.test_preview g1_teleop.test_status \
+    g1_teleop.test_feedback g1_teleop.test_services g1stairs.camera.test_inspection
 
 # Mark G1 operator shells so interactive commands are entered in the right place.
 RUN printf '%s\n' 'PS1="[jsj-g1-tools] \w\\$ "' >> /root/.bashrc

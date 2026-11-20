@@ -151,7 +151,11 @@ def main(argv=None):
     discover = commands.add_parser("discover", help="inspect live ROS images and enumerate DDS publication topic/type pairs")
     tty_dds = commands.add_parser("tty-dds", help="read an advertised DDS writer and print sample metadata")
     tty_usb = commands.add_parser("tty-usb", help="open a selected D435i directly and print bounded Z16 frame statistics")
-    for command in (discover, tty_dds, tty_usb):
+    check = commands.add_parser("check", help="check live ROS images, Unitree front video payloads and D435i depth")
+    check.add_argument("--depth-preview", type=Path, metavar="NEW_FILE.png",
+                       help="save the first USB frame with valid depth as a grayscale PNG preview")
+    check.set_defaults(action=inspection.check)
+    for command in (discover, tty_dds, tty_usb, check):
         command.add_argument("--seconds", type=_positive, default=5.0)
     tty_dds.add_argument("--topic", required=True, help="exact DDS writer topic from discover")
     tty_dds.add_argument("--type", required=True, help="exact advertised DDS type name from discover")
@@ -167,7 +171,7 @@ def main(argv=None):
     for command in (probe, record):
         command.add_argument("--source", choices=("realsense",), default="realsense")
     width, height, fps = realsense.G1_DEPTH_PROFILE
-    for command in (record, tty_usb):
+    for command in (record, tty_usb, check):
         command.add_argument("--device-index", type=_int_at_least(0))
         command.add_argument("--width", type=_int_at_least(1), default=width)
         command.add_argument("--height", type=_int_at_least(1), default=height)
@@ -187,7 +191,16 @@ def main(argv=None):
     replay.set_defaults(action=_replay)
     args = parser.parse_args(argv)
     try:
-        print(json.dumps(args.action(args), ensure_ascii=False, indent=2, allow_nan=False))
+        result = args.action(args)
+        print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+        if args.command == "check":
+            usb = result["usb_depth"]
+            if args.depth_preview is not None and "depth_preview" not in usb:
+                return 1
+            if not (result["ros"].get("status") == "ROS_IMAGE_RECEIVED"
+                    or result["front_video_dds"].get("samples_with_video_bytes")
+                    or usb.get("frames_with_valid_depth")):
+                return 1
     except ImportError as exc:
         print(json.dumps({"status": "DEPENDENCY_MISSING", "detail": str(exc)}), file=sys.stderr)
         return 1

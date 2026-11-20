@@ -7,6 +7,8 @@ import os
 import time
 from collections.abc import Mapping, Sequence
 from functools import partial
+from tempfile import NamedTemporaryFile
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -16,6 +18,9 @@ from .realsense import CameraError
 
 RAW = "sensor_msgs/msg/Image"
 COMPRESSED = "sensor_msgs/msg/CompressedImage"
+FRONT_VIDEO_TOPIC = "rt/frontvideostream"
+FRONT_VIDEO_TYPE = "unitree_go::msg::dds_::Go2FrontVideoData_"
+FRONT_VIDEO_IDL = "unitree_sdk2py.idl.unitree_go.msg.dds_:Go2FrontVideoData_"
 
 
 def _image_metadata(kind, image):
@@ -147,8 +152,29 @@ def _load_idl(qualified_name):
         raise CameraError(f"IDL_CLASS_UNAVAILABLE: {qualified_name}: {error}") from error
 
 
-def tty_dds(args):
-    from cyclonedds.core import DDSException
+def _read_dds_samples(reader, typename, seconds, verbose):
+    front_video = typename == FRONT_VIDEO_TYPE
+    payload_samples = 0
+    count = 0
+    next_report = 0.0
+    ends = time.monotonic() + seconds
+    while time.monotonic() < ends:
+        for sample in reader.take(1):
+            if not sample.sample_info.valid_data:
+                continue
+            count += 1
+            if front_video and any(len(data) for data in (sample.video720p, sample.video360p, sample.video180p)):
+                payload_samples += 1
+            if verbose and time.monotonic() >= next_report:
+                fields = _field_preview(sample) if dataclasses.is_dataclass(sample) else {"idl_type": typename}
+                print(json.dumps({"sample": count, "fields": fields}, ensure_ascii=False), flush=True)
+                next_report = time.monotonic() + 1.0
+        time.sleep(0.02)
+    return count, payload_samples
+
+
+def tty_dds(args, *, verbose=True):
+    from cyclonedds.core import DDSException, Listener
     from cyclonedds.domain import DomainParticipant
     from cyclonedds.dynamic import get_types_for_typeid
     from cyclonedds.qos import Policy, Qos
@@ -183,44 +209,112 @@ def tty_dds(args):
         partition = match.qos[Policy.Partition]
         subscriber = Subscriber(participant, qos=Qos(partition) if partition else None)
         qos = Qos(Policy.Reliability.BestEffort, Policy.History.KeepLast(1))
-        reader = DataReader(subscriber, topic, qos=qos)
-        count = 0
-        next_report = 0.0
-        ends = time.monotonic() + args.seconds
-        while time.monotonic() < ends:
-            for sample in reader.take(1):
-                if not sample.sample_info.valid_data:
-                    continue
-                count += 1
-                if time.monotonic() >= next_report:
-                    fields = _field_preview(sample) if dataclasses.is_dataclass(sample) else {"idl_type": args.type}
-                    print(json.dumps({"sample": count, "fields": fields}, ensure_ascii=False), flush=True)
-                    next_report = time.monotonic() + 1.0
-            time.sleep(0.02)
-        if not count:
-            raise CameraError("DDS_NO_SAMPLES: writer and type found, no valid samples received in the observation window")
-        return {"status": "DDS_SAMPLES_RECEIVED", "domain": _domain_id(), "topic": args.topic,
-                "type": args.type, "samples_read": count}
+        matches = {"total": 0, "incompatible_qos": 0}
+
+        def matched(_reader, status):
+            matches["total"] = status.total_count
+
+        def incompatible(_reader, status):
+            matches["incompatible_qos"] = status.total_count
+
+        listener = Listener(on_subscription_matched=matched, on_requested_incompatible_qos=incompatible)
+        reader = DataReader(subscriber, topic, qos=qos, listener=listener)
+        count, payload_samples = _read_dds_samples(reader, args.type, args.seconds, verbose)
+        if not count and verbose:
+            raise CameraError(f"DDS_NO_SAMPLES: writer and type found, no valid samples; "
+                              f"reader matches={matches['total']}, incompatible QoS events={matches['incompatible_qos']}")
+        result = {"status": "DDS_SAMPLES_RECEIVED" if count else "DDS_NO_SAMPLES",
+                  "domain": _domain_id(), "topic": args.topic, "type": args.type, "samples_read": count,
+                  "reader_matches": matches["total"], "incompatible_qos_events": matches["incompatible_qos"]}
+        if args.type == FRONT_VIDEO_TYPE:
+            result["samples_with_video_bytes"] = payload_samples
+        return result
     except DDSException as exc:
         raise CameraError(f"DDS_INSPECTION_FAILED: {exc}") from exc
 
 
-def tty_usb(args):
+def _save_depth_preview(path, image):
+    """Write an 8-bit PNG for inspection; reserve black for missing depth."""
+    valid = image != 0
+    depths = image[valid]
+    near, far = int(depths.min()), int(depths.max())
+    pixels = np.zeros_like(image, dtype=np.uint8)
+    pixels[valid] = 255 - 254 * (depths.astype(float) - near) / max(1, far - near)
+    with NamedTemporaryFile(dir=path.parent) as stream:
+        try:
+            import cv2
+        except ImportError:
+            # Also support offline inspection environments with Pillow.
+            from PIL import Image
+            Image.fromarray(pixels).save(stream, format="PNG")
+        else:
+            try:
+                ok, encoded = cv2.imencode(".png", pixels)
+            except cv2.error as error:
+                raise OSError(f"OpenCV could not encode the depth preview: {error}") from error
+            if not ok:
+                raise OSError("OpenCV could not encode the depth preview")
+            stream.write(encoded.tobytes())
+        stream.flush()
+        os.link(stream.name, path)  # Publish only the complete preview and preserve existing files.
+    return {"path": str(path), "near_raw": near, "far_raw": far}
+
+
+def tty_usb(args, *, verbose=True, preview_path=None):
     state = {}
-    count = 0
+    count = frames_with_depth = 0
+    first_valid = None
     next_report = 0.0
 
     def sample(image, info):
-        nonlocal count, next_report
+        nonlocal count, frames_with_depth, first_valid, next_report
         count += 1
-        if time.monotonic() >= next_report:
+        valid = np.count_nonzero(image)
+        if valid:
+            frames_with_depth += 1
+            if preview_path is not None and first_valid is None:
+                first_valid = (info["frame_number"], image.copy())
+        if verbose and time.monotonic() >= next_report:
             row, col = image.shape[0] // 2, image.shape[1] // 2
             raw = int(image[row, col])
             print(json.dumps({"frame_number": info["frame_number"], "height": image.shape[0],
                               "width": image.shape[1], "encoding": "Z16", "center_depth_raw": raw or None,
-                              "valid_fraction": round(np.count_nonzero(image) / image.size, 3)}), flush=True)
+                              "valid_fraction": round(valid / image.size, 3)}), flush=True)
             next_report = time.monotonic() + 1.0
 
     realsense.record(args.seconds, args.width, args.height, args.fps, args.device_index, sample, state)
-    return {"status": "USB_FRAMES_RECEIVED", "model": state["model"], "frames": count,
-            "depth_scale_m": state["depth_scale_m"]}
+    result = {"status": "USB_FRAMES_RECEIVED", "model": state["model"], "frames": count,
+              "frames_with_valid_depth": frames_with_depth, "depth_scale_m": state["depth_scale_m"]}
+    if first_valid is not None:
+        number, image = first_valid
+        try:
+            result["depth_preview"] = dict(_save_depth_preview(preview_path, image), frame_number=number)
+        except (ImportError, OSError, RuntimeError) as error:
+            result["preview_error"] = str(error)
+    return result
+
+
+def _inspect_source(function, *args, **kwargs):
+    """A failed transport should not prevent testing a second independent input."""
+    try:
+        return function(*args, **kwargs)
+    except CameraError as error:
+        status, _, detail = str(error).partition(": ")
+        return {"status": status, "detail": detail}
+    except Exception as error:
+        # DDS and ROS each define native exception types. Preserve their reason
+        # here and continue to the independent transports.
+        return {"status": "INSPECTION_FAILED", "error_type": type(error).__name__, "detail": str(error)}
+
+
+def check(args):
+    ros = _inspect_source(discover, args.seconds)
+    # `discover` keeps the full DDS endpoint list; this report tests the front
+    # video endpoint directly, independently of ROS discovery.
+    ros.pop("dds_publications", None)
+    dds_args = SimpleNamespace(topic=FRONT_VIDEO_TOPIC, type=FRONT_VIDEO_TYPE,
+                               idl_class=FRONT_VIDEO_IDL, seconds=args.seconds)
+    dds = _inspect_source(tty_dds, dds_args, verbose=False)
+    usb = _inspect_source(tty_usb, args, verbose=False, preview_path=args.depth_preview)
+    return {"domain": _domain_id(), "interface": os.getenv("G1_CAMERA_IFACE") or None,
+            "ros": ros, "front_video_dds": dds, "usb_depth": usb}

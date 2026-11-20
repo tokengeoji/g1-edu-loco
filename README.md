@@ -5,7 +5,7 @@ G1-EDU PC2에서 CPU 이미지 **`g1-jsj:base`**를 한 번 빌드하면 Ubuntu�
 
 **처음 키보드를 연결한다면 [로봇을 움직이기 전 텔레옵 점검](docs/teleop-preflight.md)을 따른다.** 실제 모터·보행 상태를 읽고 방향키와 정지를 모의 입력하는 현장 절차다.
 
-[이미지 빌드](#pc2) · [컨테이너 생성](#create) · [온도·텔레옵](#monitoring) · [카메라](#camera) · [계단 계산](#geometry) · [재개·기록 보관](#resume)
+[개발 PC와 PC2의 ROS 2·Cyclone DDS 설정](docs/development-pc.md) · [이미지 빌드](#pc2) · [컨테이너 생성](#create) · [온도·텔레옵](#monitoring) · [카메라](#camera) · [계단 계산](#geometry) · [재개·기록 보관](#resume)
 
 | 실행 위치 | 입력할 명령 |
 | --- | --- |
@@ -110,11 +110,19 @@ g1 teleop --live --interface eth0 --domain 0
 | `q` / `z` | 다음 이동의 선속도·회전속도 10% 증가 / 감소 |
 | `2` → `Enter` / `f` / `?` | FSM 802 요청 / 현재 FSM 조회 / 전체 키 안내 |
 
-키 배치는 ROS 2 `teleop_twist_keyboard`를 따른다. 기체에는 Unitree 고수준 SDK의 `SetVelocity`를 보낸다. `i` 한 번의 기본 전진 요청은 0.15 m/s이고 입력 유효시간은 최대 1초다. 키를 누르고 있으면 키 반복 입력으로 명령이 갱신된다. `SetVelocity(7105) 수락`은 서비스 응답이며 실제 발걸음은 별도로 확인한다. 이 기체에서 작동하지 않은 FSM 500 전환 키는 제거했다. 특히 예전 버전과 달리 **`w`는 선속도 증가, `m`은 후진 선회, `x`는 선속도 감소**다. [전체 배치와 무반응 진단](src/g1_teleop/README.md)
+키 배치는 ROS 2 `teleop_twist_keyboard`를 따른다. 기체에는 Unitree 고수준 SDK의 `SetVelocity`를 보낸다. `i` 한 번의 기본 전진 요청은 0.15 m/s이고 입력 유효시간은 최대 1초다. 그 1초 동안 최대 10 Hz로 남은 시간만큼 속도 요청을 다시 보내며, 새 방향 입력이나 키 반복이 들어오면 유효시간을 갱신한다. 별도 셸의 `g1 teleop --feedback --interface eth0 --domain 0`에서 기체가 추정한 이동 속력과 변위를 확인한다. `SetVelocity(7105) 수락`은 서비스 응답이며 실제 발걸음은 별도로 확인한다. 이 기체에서 작동하지 않은 FSM 500 전환 키는 제거했다. 특히 예전 버전과 달리 **`w`는 선속도 증가, `m`은 후진 선회, `x`는 선속도 감소**다. [전체 배치와 무반응 진단](src/g1_teleop/README.md)
 
 <a id="camera"></a>
 
 ## 카메라 토픽 확인과 깊이 기록
+
+현장에서는 `eth0`·도메인 0에서 전방 DDS 토픽 `rt/frontvideostream`의 발행자를 발견했고, 5초간 받은 유효 표본은 0개였다. 표준 ROS 영상, DDS 영상 바이트, USB 깊이 프레임을 한 번에 확인하려면 아래 명령을 사용한다. [결과 해석과 실제 깊이 영상 확인](docs/camera-check.md)
+
+**컨테이너 내부 · 헤드 카메라 수신 검사**
+
+```bash
+G1_CAMERA_IFACE=eth0 G1_CAMERA_DOMAIN=0 g1 camera check --seconds 5
+```
 
 발행자, 실제 수신 샘플의 타입과 광학 프레임으로 헤드 D435i 스트림을 식별한다. ROS 2 영상 하나가 ROS 그래프와 DDS 목록에 모두 나타날 수 있다. 아래 NIC와 도메인은 카메라가 연결된 네트워크에 맞춘다. 여러 내부 셸에서 카메라를 쓸 때는 **각 셸에서 같은 두 환경 변수**를 설정한다.
 
@@ -222,7 +230,7 @@ g1 stairs measure --run "$RUN_ID" --calibration "/workspace/runs/$RUN_ID/measure
 head -n 1 "/workspace/runs/$RUN_ID/geometry/stairs.jsonl"
 ```
 
-기록 때 `--calibration`을 제공했다면 측정 단계에서 보정 인자를 생략할 수 있다. 기본은 첫 프레임이며 전체는 `--all-frames`다. `riser_height_m`, `tread_depth_m`, `width_m`는 미터 단위다. 양쪽 경계가 보이지 않아 폭을 결정할 수 없으면 `width_m`은 `null`이다.
+기록 때 `--calibration`을 제공했다면 측정 단계에서 보정 인자를 생략할 수 있다. 기본은 첫 프레임이며 전체는 `--all-frames`다. `riser_height_m`, `tread_depth_m`, `width_m`는 미터 단위다. 양쪽 경계가 보이지 않아 폭을 결정할 수 없으면 `width_m`은 `null`이다. 현재 도구는 계단 치수까지 계산한다. G1 발바닥이 들어갈 착지 영역, 다음 발 위치, 해당 계단의 보행 가능 여부는 계산하지 않는다.
 
 <a id="sdk"></a>
 

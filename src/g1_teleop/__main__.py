@@ -281,6 +281,10 @@ def interact(controller, *, live=False):
     fd = sys.stdin.fileno()
     keys = TerminalKeys()
     prefix = "[실기체] " if live else "[모의] "
+
+    def input_waiting():
+        return bool(select.select([fd], [], [], 0)[0])
+
     def request_exit(_signum, _frame):
         # The SDK catches exceptions inside its RPC wait. Latch Ctrl+C instead,
         # and let any ongoing send/receive finish before sending the final zero.
@@ -296,10 +300,10 @@ def interact(controller, *, live=False):
             while not controller.exit_requested:
                 if pending is None:
                     received_at = time.monotonic()
-                    message = controller.tick()
+                    message = controller.tick(input_waiting)
                     if controller.exit_requested:
                         break
-                    if message:
+                    if message is not None:
                         pending = poll_queued(fd, keys, controller.moving_key)
                         show(message, prefix)
                 if pending is None:
@@ -330,6 +334,7 @@ def main(argv=None):
     mode.add_argument("--live", action="store_true", help="실제 G1 키보드 제어")
     mode.add_argument("--preview", action="store_true", help="시작 시 실제 FSM·모터 상태를 읽고 키 입력은 모의 실행")
     mode.add_argument("--dry-run", action="store_true", help="오프라인 모의 제어 (기본값)")
+    mode.add_argument("--feedback", action="store_true", help="이동 중 G1 오도메트리 위치·속도 수신 (읽기 전용)")
     mode.add_argument("--status", action="store_true", help="실제 G1의 FSM·보행 상태·서비스 API 버전 조회")
     parser.add_argument("--interface", metavar="NIC", help="G1 연결 인터페이스")
     parser.add_argument("--domain", type=int, default=os.getenv("ROS_DOMAIN_ID") or "0",
@@ -338,13 +343,17 @@ def main(argv=None):
                         help="GetFsmId로 확인할 로코모션 서비스 (기본 auto)")
     parser.add_argument("--waist-3dof", action="store_true", help="허리 3자유도 모델의 FSM 501 허용")
     args = parser.parse_args(argv)
-    if (args.live or args.preview or args.status) and not args.interface:
-        parser.error("--live / --preview / --status 실행에는 --interface NIC가 필요합니다.")
+    if (args.live or args.preview or args.status or args.feedback) and not args.interface:
+        parser.error("--live / --preview / --status / --feedback 실행에는 --interface NIC가 필요합니다.")
     if args.domain < 0:
         parser.error("--domain은 0 이상의 정수여야 합니다.")
-    if not args.status and not (sys.stdin.isatty() and sys.stdout.isatty()):
+    if not (args.status or args.feedback) and not (sys.stdin.isatty() and sys.stdout.isatty()):
         parser.error("키보드 제어에는 대화형 TTY가 필요합니다. Docker에서는 -it를 사용하세요.")
     try:
+        if args.feedback:
+            from .feedback import watch_odometry
+            watch_odometry(args.interface, args.domain)
+            return 0
         with live_session_lock() if args.live else nullcontext():
             if args.live or args.preview or args.status:
                 network = f"NIC={args.interface} · DDS domain={args.domain}"
@@ -364,8 +373,10 @@ def main(argv=None):
                     show("FSM과 모터 상태는 시작 시점에만 읽었습니다. 지금부터 키 입력과 f 조회는 모두 모의 실행입니다.")
                     client = DryClient(fsm)
                 if args.status:
+                    from .services import motion_service_details
                     from .status import status_details
                     show(status_details(client))
+                    show(motion_service_details())
                     return 0
             else:
                 client = DryClient()

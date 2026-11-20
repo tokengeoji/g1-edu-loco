@@ -219,6 +219,52 @@ class ControllerTest(unittest.TestCase):
         self.control.handle(",")
         self.assertEqual(self.client.calls[-1], ("velocity", -.15, 0, 0, PULSE_SECONDS))
 
+    def test_timer_sends_only_remaining_pulse_until_input_deadline(self):
+        self.control.handle("i")
+        start = self.now
+        for dt in (.2, .4, .6, .8):
+            self.now = start + dt
+            self.control.tick()
+            self.assertEqual(self.client.calls[-1][:-1], ("velocity", .15, 0, 0))
+            self.assertAlmostEqual(self.client.calls[-1][-1], 1.0 - dt)
+        self.advance(.21)
+        self.assertIn("이동 입력 1회 · 속도 RPC 수락 5회", self.control.tick())
+        self.control.tick()
+        self.assertEqual(self.client.calls[-1], ZERO)
+        self.assertEqual(self.client.calls.count(ZERO), 1)
+
+    def test_rate_limited_repeat_renews_deadline_but_speed_key_does_not_change_active_command(self):
+        self.control.handle("i")
+        self.advance(.075)
+        self.control.handle("i")
+        self.control.handle("w")
+        self.advance(.925)
+        self.control.tick()
+        self.assertEqual(self.client.calls[-1][:-1], ("velocity", .15, 0, 0))
+        self.assertAlmostEqual(self.client.calls[-1][-1], .075)
+        self.advance(.08)
+        self.assertIn("이동 입력 2회", self.control.tick())
+
+    def test_timer_read_gives_precedence_to_queued_keys_and_external_mode_changes(self):
+        self.control.handle("i")
+        self.advance(.2)
+        self.control.tick(lambda: True)
+        self.control.tick(Mock(side_effect=[False, True]))
+        self.assertEqual(self.client.calls, [("read",), ("velocity", .15, 0, 0, 1), ("read",)])
+        self.client.state = 4
+        self.assertIn("FSM=4", self.control.tick())
+        self.assertEqual(self.client.calls[-1], ZERO)
+        self.advance(.2)
+        self.assertIsNone(self.control.tick())
+
+    def test_refresh_stops_if_the_gait_changes_even_between_enabled_gaits(self):
+        self.control = Controller(self.client, waist_3dof=True, clock=lambda: self.now)
+        self.control.handle("i")
+        self.client.state = 501
+        self.advance(.2)
+        self.assertIn("FSM 501", self.control.tick())
+        self.assertEqual(self.client.calls[-1], ZERO)
+
     def test_ros_speed_keys_have_independent_linear_and_turn_controls(self):
         for key, linear, turn in [("q", 1.1, 1.1), ("z", .99, .99), ("w", 1.089, .99),
                                   ("x", .9801, .99), ("e", .9801, 1.089), ("c", .9801, .9801)]:

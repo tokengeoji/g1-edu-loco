@@ -77,3 +77,61 @@ class InspectionTest(unittest.TestCase):
         self.assertIsNone(row["center_depth_raw"])
         self.assertEqual(row["valid_fraction"], 0.5)
         self.assertEqual(result["depth_scale_m"], 0.001)
+
+    def test_check_preserves_silent_dds_and_writes_first_nonempty_usb_frame(self):
+        from . import __main__ as camera_cli
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        def fake_record(seconds, width, height, fps, index, write, state):
+            state.update(model="D435i", depth_scale_m=0.001)
+            write(np.zeros((1, 3), dtype=np.uint16), {"frame_number": 15})
+            image = np.array([[0, 10, 20]], dtype=np.uint16)
+            write(image, {"frame_number": 16})
+            image[:] = 0  # The SDK owns this memory.
+
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "depth.png"
+            with patch.object(inspection, "discover", side_effect=RuntimeError("no ROS")), \
+                 patch.object(inspection, "tty_dds", return_value={"status": "DDS_NO_SAMPLES"}), \
+                 patch.object(inspection.realsense, "record", side_effect=fake_record):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    code = camera_cli.main(["check", "--depth-preview", str(path)])
+                result = json.loads(output.getvalue())
+                self.assertEqual(code, 0)
+                self.assertEqual(result["ros"]["status"], "INSPECTION_FAILED")
+                self.assertEqual(result["front_video_dds"]["status"], "DDS_NO_SAMPLES")
+                self.assertEqual(result["usb_depth"]["frames_with_valid_depth"], 1)
+                self.assertEqual(result["usb_depth"]["depth_preview"]["frame_number"], 16)
+                data = path.read_bytes()
+                self.assertTrue(data.startswith(b"\x89PNG\r\n\x1a\n"))
+                self.assertEqual(int.from_bytes(data[16:20], "big"), 3)
+                self.assertEqual(int.from_bytes(data[20:24], "big"), 1)
+                self.assertEqual(result["usb_depth"]["depth_preview"]["near_raw"], 10)
+                self.assertEqual(result["usb_depth"]["depth_preview"]["far_raw"], 20)
+                path.write_bytes(b"existing")
+                with redirect_stdout(io.StringIO()):
+                    code = camera_cli.main(["check", "--depth-preview", str(path)])
+                self.assertEqual(code, 1)
+                self.assertEqual(path.read_bytes(), b"existing")
+
+    def test_empty_video_and_all_zero_depth_are_not_positive_checks(self):
+        from . import __main__ as camera_cli
+        with patch.object(inspection, "discover", return_value={"status": "NO_CONFIRMED_ROS_IMAGE"}), \
+             patch.object(inspection, "tty_dds", return_value={"status": "DDS_SAMPLES_RECEIVED",
+                                                                "samples_with_video_bytes": 0}), \
+             patch.object(inspection, "tty_usb", return_value={"status": "USB_FRAMES_RECEIVED",
+                                                                "frames_with_valid_depth": 0}), \
+             redirect_stdout(io.StringIO()):
+            self.assertEqual(camera_cli.main(["check"]), 1)
+
+    def test_front_video_counts_payloads_separately_from_valid_samples(self):
+        empty = NS(sample_info=NS(valid_data=True), video720p=b"", video360p=b"", video180p=b"")
+        full = NS(sample_info=NS(valid_data=True), video720p=b"", video360p=b"abc", video180p=b"")
+        reader = Mock()
+        reader.take.side_effect = [[empty], [full], [NS(sample_info=NS(valid_data=False))]]
+        with patch.object(inspection.time, "monotonic", side_effect=[0, 0.1, 0.2, 0.3, 1]), \
+             patch.object(inspection.time, "sleep"):
+            counts = inspection._read_dds_samples(reader, inspection.FRONT_VIDEO_TYPE, 1, False)
+        self.assertEqual(counts, (2, 1))

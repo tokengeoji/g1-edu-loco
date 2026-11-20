@@ -40,6 +40,29 @@ ln -sT /workspace/jsj-teleop-src/src/g1_teleop /workspace/g1_teleop
 (cd /workspace && python3 -c 'from pathlib import Path; import g1_teleop; print(Path(g1_teleop.__file__).resolve())')
 ```
 
+### 기존 체크아웃에서 텔레옵과 카메라 검사 함께 사용하기
+
+컨테이너에 있는 `/workspace/jsj-teleop-src`가 이미 `jsj` 브랜치이면 아래 명령을 사용한다. 새 셸을 열 때마다 `export` 줄을 적용하면 카메라 검사와 텔레옵이 같은 체크아웃의 코드를 읽는다. 기본 이미지 설치는 [PC2 빌드 절차](../README.md#pc2)를 따른다.
+
+**컨테이너 내부 · 기존 소스 갱신 후 읽기 전용 상태 확인**
+
+```bash
+git -C /workspace/jsj-teleop-src pull --ff-only &&
+export PYTHONPATH="/workspace/jsj-teleop-src/src${PYTHONPATH:+:$PYTHONPATH}"
+g1 teleop --status --interface eth0 --domain 0
+```
+
+`robot_state`에서 주 제어 서비스 `ai_sport`의 상태 원값과 기체 소프트웨어 패키지 버전을 별도로 조회한다. 펌웨어가 버전 조회를 지원하지 않으면 Unitree 앱에 표시된 기체 소프트웨어 버전을 사용한다. 보행 서비스 API 버전은 통신 인터페이스의 버전을 뜻한다. [G1 상태 서비스 문서](https://support.unitree.com/home/en/G1_developer/robot_state_client_interface) · [SDK의 조회 함수](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/unitree_sdk2py/b2/robot_state/robot_state_client.py)
+
+**컨테이너 내부 · 두 번째 셸에서 보행기 추정값 구독**
+
+```bash
+export PYTHONPATH="/workspace/jsj-teleop-src/src${PYTHONPATH:+:$PYTHONPATH}"
+g1 teleop --feedback --interface eth0 --domain 0
+```
+
+`--feedback`은 오도메트리의 수평 속력과 시작점으로부터 수평거리를 표시한다. 제자리에서의 흔들림과 추정 오차가 있으므로 현장 발걸음과 함께 본다. 조종기로 걸었을 때와 텔레옵으로 요청했을 때 같은 FSM 802에서 출력이 어떻게 다른지 비교할 수 있다. [키 입력 및 정지 절차](../src/g1_teleop/README.md) · [카메라 검사](camera-check.md)
+
 ## 2. 터미널 1에서 온도·배터리 확인
 
 **G1 호스트 · 터미널 1**
@@ -101,7 +124,7 @@ g1 teleop --preview --interface eth0 --domain 0
 **컨테이너 내부 · 로봇 연결 없이 자동 검사**
 
 ```bash
-python3 -m unittest g1_teleop.test_control g1_teleop.test_terminal g1_teleop.test_preview g1_teleop.test_status
+python3 -m unittest g1_teleop.test_control g1_teleop.test_terminal g1_teleop.test_preview g1_teleop.test_status g1_teleop.test_feedback g1_teleop.test_services
 ```
 
 마지막에 `OK`가 출력되면 키 입력 처리와 미리보기 회귀 검사를 통과한 것이다. 직접 키만 연습할 때는 컨테이너 내부에서 `g1 teleop --dry-run`을 실행한다.

@@ -115,6 +115,12 @@ class DiscoveryTests(unittest.TestCase):
         self.assertIn("SDK 상태", output.getvalue())
         self.assertIn("현재 FSM=4 (잠금 기립) · NIC=eth0 · DDS domain=8 · service=loco", output.getvalue())
 
+    def test_feedback_is_read_only_and_needs_no_tty_or_loco_rpc(self):
+        with patch(__package__ + ".feedback.watch_odometry") as observe, patch.object(cli, "connect") as connect:
+            self.assertEqual(cli.main(["--feedback", "--interface", "lo", "--domain", "7"]), 0)
+        observe.assert_called_once_with("lo", 7)
+        connect.assert_not_called()
+
     def test_failed_discovery_shows_network_and_rpc_code(self):
         errors = io.StringIO()
         with patch.object(cli, "connect", side_effect=RuntimeError("sport GetFsmId code=3104")):
@@ -338,7 +344,9 @@ sys.exit(cli.main(["--live", "--interface", "lo", "--domain", "0"]))
         os.write(self.master, b"\x03")
         self.await_output("종료 정지 · 속도 0 요청 수락")
         self.assert_restored()
-        self.assertEqual(self.velocities.read_text().splitlines(), ["move", "zero", "zero"])
+        commands = self.velocities.read_text().splitlines()
+        self.assertGreater(commands.count("move"), 1)
+        self.assertEqual(commands, ["move"] * commands.count("move") + ["zero", "zero"])
 
     def test_failed_final_stop_reports_rpc_code_and_exits_unsuccessfully(self):
         self.start_live_spy(zero_code=4201)
