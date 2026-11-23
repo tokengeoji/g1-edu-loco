@@ -38,11 +38,11 @@ class NativeClient:
 
     def Move(self, vx, vy, yaw):
         self.wrapper_calls.append(("Move", vx, vy, yaw))
-        return self.SetVelocity(vx, vy, yaw, 1) or None
+        return self.SetVelocity(vx, vy, yaw, 1)
 
     def StopMove(self):
         self.wrapper_calls.append(("StopMove",))
-        return self.SetVelocity(0, 0, 0, 1) or None
+        return self.SetVelocity(0, 0, 0, 1)
 
 
 ZERO = ("velocity", 0.0, 0.0, 0.0, PULSE_SECONDS)
@@ -163,17 +163,17 @@ class ControllerTest(unittest.TestCase):
                 self.assertIsNone(control.tick())
 
     def test_stock_wrapper_errors_trigger_stop_and_close_retries_only_stop(self):
-        for failure in (24, RuntimeError("SetVelocity(7105) RPC code=24")):
+        for failure, reason in ((24, "24"), (RuntimeError("SDK failure"), "SDK failure"), (None, "code=None")):
             with self.subTest(failure=failure):
                 client = NativeClient()
                 control = Controller(client, clock=lambda: self.now)
                 client.Move = Mock(side_effect=[failure])
-                self.assertIn("24", control.handle("i"))
+                self.assertIn(reason, control.handle("i"))
                 client.Move.assert_called_once_with(.30, 0, 0)
                 self.assertEqual(client.wrapper_calls, [("StopMove",)])
                 self.advance(.2)
                 self.assertIsNone(control.tick())
-                client.StopMove = Mock(side_effect=[RuntimeError("lost stop reply"), None])
+                client.StopMove = Mock(side_effect=[RuntimeError("lost stop reply"), 0])
                 self.assertIn("속도 0 요청 수락", control.close(force_stop=True))
                 self.assertEqual(client.StopMove.call_count, 2)
 

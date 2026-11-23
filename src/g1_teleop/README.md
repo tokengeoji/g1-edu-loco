@@ -40,7 +40,7 @@ docker exec -it jsj-g1-tools bash
 | --- | --- |
 | `--preview --interface eth0 --domain 0` | 시작할 때 실제 FSM과 29개 관절의 위치·속도를 읽고, 관측한 FSM에서 키 입력을 모의 실행한다. 로봇 NIC가 필요하다. |
 | `--dry-run` | 기체와 통신하지 않고 모의 FSM 802에서 키를 직접 연습한다. 기본 실행 모드다. |
-| `--status --interface eth0 --domain 0` | 실제 FSM ID와 응답한 서비스, 서비스 API 버전, `GetFsmMode`의 정적·동적 상태를 표시하고 종료한다. |
+| `--status --interface eth0 --domain 0` | C++ SDK에서 FSM ID, 서비스 API 버전, 정적·동적 상태, 서비스 목록과 패키지 버전을 읽고 종료한다. |
 | `--feedback --interface eth0 --domain 0` | G1이 추정한 평면 위치, 속력, 회전속도를 0.25초마다 별도 터미널에 표시한다. 조종기와 SDK 조작을 같은 기준으로 비교할 수 있다. |
 | `--live --interface eth0 --domain 0` | 입력한 모드·이동·정지 명령을 실제 기체로 전송한다. 별도 세션에서 명시적으로 실행한다. |
 
@@ -76,9 +76,24 @@ g1 teleop --live --interface eth0 --domain 0
 
 시작 화면의 `[실기체]` 표시를 확인한다. 일반 보행을 선택하려면 기체의 전환 조건을 확인한 뒤 `v`와 `Enter`로 FSM 500을 요청한다. `f`에서 500이 확인되면 다음 방향 키부터 속도를 요청할 수 있다. Run 모드는 `2`와 `Enter`로 요청한다. `k` 또는 스페이스로 속도 0을 요청한다.
 
+## 실기체에서 호출하는 공식 함수
+
+`--live`는 이미지에 고정한 Unitree C++ SDK `aaf69cb`의 `unitree::robot::g1::LocoClient`를 사용한다. Python은 키를 읽고 속도·모드 인자를 고르며, C++ 호출부는 아래 공개 함수의 반환 코드를 화면으로 돌려준다. 서비스 이름 `sport`, API 번호, DDS 요청 구성과 전송은 SDK가 담당한다. [프로젝트 C++ 호출부](native/) · [Unitree C++ 사용 예제](https://github.com/unitreerobotics/unitree_sdk2/blob/aaf69cb56c9d5ed63d8b284008ec3a8ab999bec1/example/g1/high_level/g1_loco_client_example.cpp) · [공식 서비스 이름](https://github.com/unitreerobotics/unitree_sdk2/blob/aaf69cb56c9d5ed63d8b284008ec3a8ab999bec1/include/unitree/robot/g1/loco/g1_loco_api.hpp#L11)
+
+| 조작 | 호출하는 C++ 함수 |
+| --- | --- |
+| `f` 또는 이동 전 모드 확인 | `GetFsmId(id)` |
+| 보행·자세 모드 선택 후 `Enter` | `SetFsmId(id)`. 예를 들어 `2`의 대상이 802이면 `SetFsmId(802)` |
+| 방향 키 / 정지 키·입력 만료·종료 (기본) | `Move(vx, vy, yaw)` / `StopMove()` |
+| 명시적으로 `--timed-velocity` 선택 | `SetVelocity(vx, vy, yaw, duration)`로 유효시간 지정. 정지도 속도 0으로 같은 함수 호출 |
+| 500/501에서 `4` 또는 `5` → `Enter` | `SetBalanceMode(0)` 또는 `SetBalanceMode(1)` |
+| Run에서 `!`, `@`, `#`, `$` | `SetSpeedMode(level)`에 단계 0/1/2/3 전달 |
+
+SDK 기본 설정에서 세 인자의 `Move`는 유효시간 1초로 `SetVelocity`를 호출한다. `StopMove`는 같은 함수에 세 축 속도 0을 전달한다. 두 경우 모두 SDK가 API 7105의 처리 결과를 반환한다. 전진 키 `i`는 기본 배율에서 전방 속도만 요청한다. 몸통 각도·관절 목표·첫발 순서는 텔레옵이 지정하지 않으며, 이 브랜치에서 SDK 함수를 재정의하지 않는다. [공식 Move·StopMove 구현](https://github.com/unitreerobotics/unitree_sdk2/blob/aaf69cb56c9d5ed63d8b284008ec3a8ab999bec1/include/unitree/robot/g1/loco/g1_loco_client.hpp#L226-L236) · [공식 SetVelocity 구현](https://github.com/unitreerobotics/unitree_sdk2/blob/aaf69cb56c9d5ed63d8b284008ec3a8ab999bec1/include/unitree/robot/g1/loco/g1_loco_client.hpp#L164-L173)
+
 ## 이동과 속도
 
-기본 조작은 ROS 2 `teleop_twist_keyboard`의 평면 키 배치다. PC2의 텔레옵은 이동 키를 Unitree `LocoClient.Move(vx, vy, yaw)` 호출로, 정지 키를 `StopMove()` 호출로 바꾼다. SDK는 두 함수 안에서 API 7105에 `velocity=[전방, 좌측, 좌회전]`과 초 단위 유효시간을 보낸다. [ROS 2 키 배치](https://github.com/ros2/teleop_twist_keyboard) · [공식 Move·StopMove 구현](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/unitree_sdk2py/g1/loco/g1_loco_client.py#L140-L153)
+기본 조작은 ROS 2 `teleop_twist_keyboard`의 평면 키 배치다. [ROS 2 키 배치](https://github.com/ros2/teleop_twist_keyboard)
 
 | 키 | 기체 기준 요청 |
 | --- | --- |
@@ -109,7 +124,7 @@ g1 teleop --live --interface eth0 --domain 0
 
 | 키 → Enter | SDK에 요청하는 모드 |
 | --- | --- |
-| `v` | 일반 보행(Walk Motion). 고정 버전의 SDK `Start()`와 같은 `SetFsmId(500)`을 호출해 반환 코드를 검사한다. [Unitree SDK](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/unitree_sdk2py/g1/loco/g1_loco_client.py#L120-L154) |
+| `v` | 일반 보행(Walk Motion). 고정 버전의 SDK `Start()`와 같은 `SetFsmId(500)`을 호출해 반환 코드를 검사한다. [Unitree SDK](https://github.com/unitreerobotics/unitree_sdk2/blob/aaf69cb56c9d5ed63d8b284008ec3a8ab999bec1/include/unitree/robot/g1/loco/g1_loco_client.hpp#L214-L222) |
 | `2` | Run 모드. 시작 시 801 또는 802를 관측하면 해당 ID를 사용하고, 다른 상태에서 시작하면 연구실에서 관측한 802를 기본값으로 사용한다. 기체의 Run ID를 알고 있으면 `--run-fsm 801` 또는 `--run-fsm 802`로 2번 키의 대상을 지정할 수 있다. |
 | `8` | 허리 3자유도 보행(501). 해당 모델을 확인하고 실행 옵션 `--waist-3dof`를 지정한 경우 |
 | `1` / `3` | 잠금 기립(4) / 위치 제어 쪼그림(2). 균형 제어가 없어 기체 지지 필요 |
@@ -136,7 +151,7 @@ g1 teleop --live --interface eth0 --domain 0
 
 2026년 11월 23일, 운영자는 같은 연구실 기체의 FSM 802에서 순정 조종기로 회전 없이 앞뒤로 걸었다고 확인했다. 키보드에서는 `eth0`, DDS 도메인 0, `sport` 서비스로 순수 전후진 ±0.15 m/s를 두 차례 시험했으며, 두 번 모두 현장에서 제자리에 머무는 것을 확인했다. 이전 현장 출력에서도 +0.165 m/s 전진 요청이 수락된 뒤 제자리였다. 키 유효시간 안에 속도 요청을 반복 전송하도록 수정한 뒤에도 ±0.15 m/s에서 증상이 재현됐다.
 
-두 시험 모두 당시의 `SetVelocity` 경로를 사용했다. 특히 2차 시험은 타이머 재전송과 남은 유효시간이 적용된 기록이다. 현재 기본 `Move`와 `StopMove`도 내부적으로 7105를 호출하고, 텔레옵은 내부 호출의 반환 코드를 확인한다. 기존 2차 시험과 같은 전송 방식을 선택하는 옵션은 `--timed-velocity`다. [공식 SetVelocity 구현](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/unitree_sdk2py/g1/loco/g1_loco_client.py#L70-L78)
+두 시험 모두 당시의 `SetVelocity` 경로를 사용했다. 특히 2차 시험은 타이머 재전송과 남은 유효시간이 적용된 기록이다. 현재 기본 C++ `Move`와 `StopMove`도 내부적으로 7105를 호출한다. 텔레옵은 두 공식 함수가 반환한 코드를 확인한다. 기존 2차 시험과 같은 전송 방식을 선택하는 옵션은 `--timed-velocity`다. [공식 SetVelocity 구현](https://github.com/unitreerobotics/unitree_sdk2/blob/aaf69cb56c9d5ed63d8b284008ec3a8ab999bec1/include/unitree/robot/g1/loco/g1_loco_client.hpp#L164-L173)
 
 다음은 갱신을 적용한 2차 시험(11:26–11:29 KST)에서 요청·응답과 관절 센서, 오도메트리를 같은 시간 구간으로 맞춘 결과다. 전방 변위는 각 구간이 시작됐을 때 기체가 바라보던 방향으로 환산한 추정값이다.
 
@@ -159,7 +174,7 @@ g1 teleop --live --interface eth0 --domain 0
 
 ### FSM 802 전후진의 기본 속도와 고정 속도
 
-속도 옵션 없이 기본 배율에서 `i`를 누르면 공식 예제와 같은 `Move(0.3, 0, 0)`, `,`는 `Move(-0.3, 0, 0)`을 호출한다. 기본 순수 전후진은 `x` 한 번으로 0.27 m/s로 낮아지고, 배율을 높여도 0.30 m/s를 넘지 않는다. `--straight-speed 0.30`을 명시하면 배율을 바꿔도 순수 전후진 크기가 0.30 m/s로 고정된다. 옆걸음은 기본 0.10 m/s이며, `m`의 후진 선회는 1배에서 `Move(-0.15, 0, -0.3)`이다. [공식 전진 예제](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/example/g1/high_level/g1_loco_client_example.py#L90-L98)
+속도 옵션 없이 기본 배율에서 `i`를 누르면 공식 Python 예제와 같은 `Move(0.3, 0, 0)`, `,`는 `Move(-0.3, 0, 0)`을 호출한다. 기본 순수 전후진은 `x` 한 번으로 0.27 m/s로 낮아지고, 배율을 높여도 0.30 m/s를 넘지 않는다. `--straight-speed 0.30`을 명시하면 배율을 바꿔도 순수 전후진 크기가 0.30 m/s로 고정된다. 옆걸음은 기본 0.10 m/s이며, `m`의 후진 선회는 1배에서 `Move(-0.15, 0, -0.3)`이다. [공식 전진 예제](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/example/g1/high_level/g1_loco_client_example.py#L90-L98)
 
 **컨테이너 내부 · 기체에 명령을 보내기 전 전진·후진의 부호 확인**
 

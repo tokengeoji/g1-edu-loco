@@ -106,7 +106,7 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(after.count("[모의] StopMove()"), 2)  # k and exit.
         self.assertNotIn("[모의] SetVelocity(", text)
         self.assertEqual(self.channel_events, [("open", "test-nic", 17), ("close", "test-nic", 17)])
-        self.factory.assert_called_once_with("sport")
+        self.factory.assert_called_once_with()
         self.robot.GetFsmId.assert_called_once_with()
         self.connect.assert_not_called()
 
@@ -226,9 +226,11 @@ class PreviewTests(unittest.TestCase):
     def test_plain_status_reports_diagnostics_and_exits_before_keyboard(self):
         self.connect.side_effect = lambda domain, nic, service: cli.discover(service)
         with patch.object(cli, "interact") as interact, \
-                patch(__package__ + ".status.status_details", return_value="SDK 상태") as details:
+                patch(__package__ + ".status.status_details", return_value="SDK 상태") as details, \
+                patch(__package__ + ".services.motion_service_details") as services:
             self.assertEqual(cli.main(["--status", "--interface", "test-nic", "--service", "sport"]), 0)
             interact.assert_not_called()
             details.assert_called_once_with(self.robot)
+            services.assert_called_once_with(self.robot)
         self.assertEqual(self.channel_events, [])
         self.robot.GetFsmId.assert_called_once_with()

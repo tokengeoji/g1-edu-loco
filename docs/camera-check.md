@@ -1,7 +1,7 @@
 <!-- Author: Codex (IIC) -->
 # G1 헤드 카메라 수신 확인
 
-연구실 G1의 유선 `eth0`, 도메인 0에서 8초간 탐색했을 때 표준 ROS 2 영상은 발견되지 않았다. Unitree 전방 영상 토픽 `rt/frontvideostream`의 발행자는 발견됐다. 공식 타입으로 5초간 구독한 결과는 `DDS_NO_SAMPLES`였다. 이 두 기록은 헤드 카메라가 꺼졌는지, PC2에 연결됐는지, 원시 깊이를 받을 수 있는지까지 설명하지 않는다.
+연구실 G1의 유선 `eth0`·도메인 0에서 전방 DDS 토픽 `rt/frontvideostream` 발행자를 발견했다. 설치된 SDK 메시지로는 5초간 유효 표본이 없었다. 이후 기체가 광고한 메시지의 필드 구성을 사용해 5.1초간 영상 패킷 148개를 수신했고, 별도 관측에서는 640×360 컬러 영상 23장을 디코딩했다. 이 전방 컬러의 물리 카메라는 확정되지 않았다. 같은 네트워크에서 머리 D435i의 ROS RGB·깊이 발행자는 0개였고, PC2의 USB 장치 목록에서는 D435i가 보였다. [원본 관측과 실험 수신기](teleop-802-evidence.md#같은-날의-카메라계단-상태)
 
 **G1 호스트 · 실행 중인 통합 컨테이너 접속**
 
@@ -16,18 +16,30 @@ export G1_CAMERA_IFACE=eth0 G1_CAMERA_DOMAIN=0
 g1 camera check --seconds 5
 ```
 
-5초는 경로별 관측 시간이다. 도구는 ROS 2 표준 영상 토픽을 구독하고, Unitree SDK의 공식 메시지 정의로 전방 DDS를 구독한 뒤, RealSense SDK로 D435i 원시 깊이 스트림을 연다. USB 스트림은 검사가 끝나면 닫힌다. 한 경로에서 오류가 발생해도 나머지 검사 결과를 볼 수 있다.
+5초는 경로별 관측 시간이다. 도구는 ROS 2 표준 영상 토픽과 전방 DDS 메시지를 각각 구독한 뒤, 공식 RealSense SDK로 D435i 원시 깊이 스트림을 연다. USB 스트림은 검사가 끝나면 닫힌다. 한 경로에서 오류가 발생해도 나머지 검사 결과를 볼 수 있다.
 
 | 출력 | 판독 |
 | --- | --- |
 | `ros.ros_images`에서 `samples_received > 0` | 해당 토픽에서 영상 메시지를 수신했다. 실제 광학 프레임, 인코딩과 발행자를 확인하고 [ROS 영상 보기](../README.md#camera)에서 해당 토픽을 선택한다. |
 | `front_video_dds.reader_matches > 0`이면서 `samples_read = 0` | DDS 구독자가 발행자와 연결됐지만 관측 시간에 유효한 메시지가 오지 않았다. |
 | `front_video_dds.status = DDS_NO_SAMPLES`, `reader_matches = 0` | 발행자는 탐색됐고 구독자 매칭은 관측되지 않았다. `incompatible_qos_events > 0`이면 Cyclone DDS가 QoS 불일치를 보고했다. |
-| `front_video_dds.samples_with_video_bytes > 0` | 하나 이상의 메시지에 영상 바이트가 있다. 이 검사는 코덱·영상 내용을 디코딩하지 않는다. 공식 타입에는 세 해상도의 바이트 배열과 시간 필드가 있다. |
+| `front_video_dds.samples_with_video_bytes > 0` | 하나 이상의 메시지에 영상 바이트가 있다. 이 검사는 코덱·영상 내용을 디코딩하지 않는다. 설치 SDK의 형식은 해상도별 바이트 배열을, 현장 발행자의 형식은 해상도 값과 영상 바이트 배열을 담는다. |
 | `usb_depth.frames_with_valid_depth > 0`, `depth_scale_m > 0` | D435i에서 Z16 깊이 프레임을 받았고 0이 아닌 픽셀과 SDK가 읽은 미터 환산값을 확인했다. |
 | `usb_depth.frames > 0`, `frames_with_valid_depth = 0` | 받은 프레임에서 유효 거리 픽셀이 하나도 없었다. 계단 치수를 추정할 관측이 부족하다. |
 | `usb_depth.status = DEVICE_NOT_VISIBLE` | 현재 컨테이너의 SDK에서 장치를 찾지 못했다. [USB 장치 확인 방법](../README.md#create)으로 PC2의 장치 목록과 컨테이너에 전달한 장치 경로를 비교한다. |
 | `DEVICE_BUSY` 또는 `DEPTH_PROFILE_UNSUPPORTED` | 점유한 프로그램이 제공하는 깊이 토픽을 확인한다. 프로필 오류라면 `g1 camera probe-usb`에서 장치가 지원하는 조합을 보고 `--width`, `--height`, `--fps`로 선택한다. |
+
+## 전방 DDS 영상 바이트 확인
+
+**컨테이너 내부 · PC2의 전방 DDS 발행자 읽기**
+
+```bash
+export G1_CAMERA_IFACE=eth0 G1_CAMERA_DOMAIN=0
+g1 camera tty-dds --topic rt/frontvideostream \
+  --type 'unitree_go::msg::dds_::Go2FrontVideoData_' --seconds 5
+```
+
+이 명령은 발행자가 광고한 타입과 설치된 SDK의 타입을 대조한다. 출력의 `idl_source=unitree_sdk`는 SDK에 포함된 타입으로 읽었을 때, `writer_type`은 Cyclone DDS가 발행자의 타입 설명을 받아 사용했을 때 표시된다. 타입 ID가 없는 발행자에는 이 토픽의 설치 SDK 타입을 시도한다. `--idl-class`를 명시했을 때 광고된 타입 ID와 다르면 `DDS_TYPE_MISMATCH`가 표시된다. `tty-dds`는 메시지 필드와 영상 바이트 수를 출력한다.
 
 ## USB에서 실시간 컬러·깊이 영상 켜기
 
@@ -39,7 +51,7 @@ g1 camera check --seconds 5
 G1_CAMERA_IFACE=eth0 G1_CAMERA_DOMAIN=0 g1 camera start
 ```
 
-기본값은 컬러와 깊이 각각 640×480, 30 fps다. 첫 프레임을 실제 발행하면 스트림 이름·크기·인코딩과 토픽을 출력한다. 터미널을 열어 두고 사용한 뒤 Ctrl+C로 카메라를 해제한다. 깊이만 보려면 `g1 camera start --stream depth`, 색상만 보려면 `--stream color`를 사용한다. 장치가 지원하는 조합에 맞춰 `--width`, `--height`, `--fps`를 지정할 수 있다. 선택한 스트림에서 5초 이상 새 프레임이 없으면 종료하고 해당 스트림을 알려 준다.
+이 경로는 공식 `pyrealsense2.pipeline.start(config)`로 장치를 열고 SDK의 깊이 단위와 카메라 내부 파라미터를 읽는다. 프로젝트 ROS 2 발행기가 영상과 보정 정보를 아래 토픽으로 보낸다. 기본값은 컬러와 깊이 각각 640×480, 30 fps다. 첫 프레임을 실제 발행하면 스트림 이름·크기·인코딩과 토픽을 출력한다. 터미널을 열어 두고 사용한 뒤 Ctrl+C로 카메라를 해제한다. 깊이만 보려면 `g1 camera start --stream depth`, 색상만 보려면 `--stream color`를 사용한다. 장치가 지원하는 조합에 맞춰 `--width`, `--height`, `--fps`를 지정할 수 있다. 선택한 스트림에서 5초 이상 새 프레임이 없으면 종료하고 해당 스트림을 알려 준다.
 
 | ROS 2 이미지 토픽 | 함께 발행하는 보정 정보 | 영상 의미 |
 | --- | --- | --- |

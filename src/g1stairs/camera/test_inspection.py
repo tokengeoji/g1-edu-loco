@@ -65,6 +65,32 @@ class InspectionTest(unittest.TestCase):
         preview = inspection._field_preview(Frame(640, b"x" * 1000))
         self.assertEqual(preview, {"width": 640, "data": {"length": 1000}})
 
+    def test_front_writer_selects_the_sdk_or_exact_advertised_type(self):
+        stock = NS(__idl__=NS(get_type_id=lambda: "stock"))
+        actual = NS(__idl__=NS(get_type_id=lambda: "actual"))
+        fetch = Mock(return_value=(actual, {}))
+        modules = {"cyclonedds.core": NS(DDSException=RuntimeError),
+                   "cyclonedds.dynamic": NS(get_types_for_typeid=fetch),
+                   "cyclonedds.util": NS(duration=lambda seconds: seconds)}
+        writer = NS(topic_name=inspection.FRONT_VIDEO_TOPIC, type_name=inspection.FRONT_VIDEO_TYPE)
+        with patch.dict("sys.modules", modules), patch.object(inspection, "_load_idl", return_value=stock) as load_idl:
+            for writer.type_id in ("stock", None):
+                self.assertEqual(inspection._writer_type(None, writer, None, 3), (stock, "unitree_sdk"))
+            writer.type_id = "actual"
+            with self.assertRaisesRegex(inspection.CameraError, "DDS_TYPE_MISMATCH"):
+                inspection._writer_type(None, writer, inspection.FRONT_VIDEO_IDL, 3)
+            fetch.assert_not_called()
+            self.assertEqual(inspection._writer_type(None, writer, None, 3), (actual, "writer_type"))
+            fetch.assert_called_once_with(None, "actual", 3)
+            fetch.return_value = stock, {}
+            with self.assertRaisesRegex(inspection.CameraError, "DDS_TYPE_MISMATCH"):
+                inspection._writer_type(None, writer, None, 3)
+            load_idl.side_effect = inspection.CameraError("IDL_CLASS_UNAVAILABLE")
+            fetch.return_value = actual, {}
+            self.assertEqual(inspection._writer_type(None, writer, None, 3), (actual, "writer_type"))
+            with self.assertRaisesRegex(inspection.CameraError, "IDL_CLASS_UNAVAILABLE"):
+                inspection._writer_type(None, writer, inspection.FRONT_VIDEO_IDL, 3)
+
     def test_usb_tty_reports_invalid_center_and_measured_scale(self):
         def fake_record(seconds, width, height, fps, index, write, state):
             state.update(model="D435i", depth_scale_m=0.001)
@@ -130,8 +156,10 @@ class InspectionTest(unittest.TestCase):
         empty = NS(sample_info=NS(valid_data=True), video720p=b"", video360p=b"", video180p=b"")
         full = NS(sample_info=NS(valid_data=True), video720p=b"", video360p=b"abc", video180p=b"")
         reader = Mock()
-        reader.take.side_effect = [[empty], [full], [NS(sample_info=NS(valid_data=False))]]
-        with patch.object(inspection.time, "monotonic", side_effect=[0, 0.1, 0.2, 0.3, 1]), \
+        live = NS(sample_info=NS(valid_data=True), resolution=360, data=[0, 1, 0])
+        silent = NS(sample_info=NS(valid_data=True), resolution=720, data=[])
+        reader.take.side_effect = [[empty], [full], [live], [silent], [NS(sample_info=NS(valid_data=False))]]
+        with patch.object(inspection.time, "monotonic", side_effect=[0, 0.1, 0.2, 0.3, 0.4, 0.5, 1]), \
              patch.object(inspection.time, "sleep"):
             counts = inspection._read_dds_samples(reader, inspection.FRONT_VIDEO_TYPE, 1, False)
-        self.assertEqual(counts, (2, 1))
+        self.assertEqual(counts, (4, 2))

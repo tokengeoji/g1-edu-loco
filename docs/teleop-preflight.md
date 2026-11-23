@@ -20,44 +20,24 @@
 docker build --pull=false --platform linux/arm64 -f docker/base/Dockerfile -t g1-jsj:base 'https://github.com/tokengeoji/g1-edu-loco.git#jsj'
 ```
 
-### 실행 중인 컨테이너에서 텔레옵만 업데이트할 때
+### 기존 컨테이너에서 업데이트하는 경우
 
-현재 `jsj-g1-tools`에 설치한 Node.js·Codex와 실험 기록을 유지한 채 텔레옵만 시험할 수 있다. 기존 텔레옵 세션을 종료하고 컨테이너 안에서 아래 명령을 한 번 실행한다. 새 소스를 검사한 뒤 `/workspace/g1_teleop` 링크를 만들면, `/workspace`에서 Python을 실행하는 기존 `g1 teleop` 명령이 이 패키지를 사용한다.
+현재 컨테이너의 Node.js·Codex와 실험 기록을 유지하려면 [현장 가이드의 소스 업데이트 절차](quickstart-ko.md#update-tools)를 따른다. 체크아웃을 갱신한 뒤 **컨테이너 안에서 C++ 호출부까지 빌드**한다. 새 운영 이미지에는 빌드 결과가 이미 포함되어 있다.
 
-**컨테이너 내부 · 기존 이미지에서 처음 적용**
-
-```bash
-git clone --depth 1 --branch jsj https://github.com/tokengeoji/g1-edu-loco.git /workspace/jsj-teleop-src &&
-(cd /workspace/jsj-teleop-src/src && python3 -m unittest discover -s g1_teleop -t . -q) &&
-ln -sT /workspace/jsj-teleop-src/src/g1_teleop /workspace/g1_teleop
-```
-
-`ln`은 기존 경로를 덮어쓰지 않는다. 이미 이 절차로 설치했다면 텔레옵을 종료하고 `git -C /workspace/jsj-teleop-src pull --ff-only`로 갱신한 뒤 같은 검사를 실행한다. 다음 명령에서 출력된 경로가 체크아웃의 패키지를 가리키면 설치한 버전이다.
-
-**컨테이너 내부 · 적용 확인**
+**컨테이너 내부 · C++ 설치와 읽기 전용 상태 확인**
 
 ```bash
-(cd /workspace && python3 -c 'from pathlib import Path; import g1_teleop; print(Path(g1_teleop.__file__).resolve())')
-```
-
-### 기존 체크아웃에서 텔레옵과 카메라 검사 함께 사용하기
-
-컨테이너에 있는 `/workspace/jsj-teleop-src`가 이미 `jsj` 브랜치이면 아래 명령을 사용한다. 새 셸을 열 때마다 `export` 줄을 적용하면 카메라 검사와 텔레옵이 같은 체크아웃의 코드를 읽는다. 기본 이미지 설치는 [PC2 빌드 절차](../README.md#pc2)를 따른다.
-
-**컨테이너 내부 · 기존 소스 갱신 후 읽기 전용 상태 확인**
-
-```bash
-git -C /workspace/jsj-teleop-src pull --ff-only &&
-export PYTHONPATH="/workspace/jsj-teleop-src/src${PYTHONPATH:+:$PYTHONPATH}"
+python3 -c 'import _g1_loco; print(_g1_loco.__file__)'
 g1 teleop --status --interface eth0 --domain 0
 ```
 
-`robot_state`에서 주 제어 서비스 `ai_sport`의 상태 원값과 기체 소프트웨어 패키지 버전을 별도로 조회한다. 펌웨어가 버전 조회를 지원하지 않으면 Unitree 앱에 표시된 기체 소프트웨어 버전을 사용한다. 보행 서비스 API 버전은 통신 인터페이스의 버전을 뜻한다. [G1 상태 서비스 문서](https://support.unitree.com/home/en/G1_developer/robot_state_client_interface) · [SDK의 조회 함수](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/unitree_sdk2py/b2/robot_state/robot_state_client.py)
+첫 줄은 로봇에 연결하지 않고 C++ 모듈을 불러온다. 다음 줄은 기체 상태를 조회한다. `--dry-run`은 키와 타이머를 연습하는 모드이므로 모듈 설치 여부는 첫 줄로 확인한다.
+
+`--status`는 C++ `LocoClient`의 `GetFsmId`, `GetFsmMode`, `GetServerApiVersion`을 호출한다. C++ `RobotStateClient`의 `ServiceList`와 `GetPkgVersion`으로 `ai_sport` 상태와 패키지 버전도 조회한다. 펌웨어가 버전 조회를 지원하지 않으면 Unitree 앱에 표시된 기체 소프트웨어 버전을 사용한다. 보행 서비스 API 버전은 통신 인터페이스의 버전을 뜻한다. [G1 상태 서비스 문서](https://support.unitree.com/home/en/G1_developer/robot_state_client_interface) · [SDK의 조회 함수](https://github.com/unitreerobotics/unitree_sdk2/blob/aaf69cb56c9d5ed63d8b284008ec3a8ab999bec1/include/unitree/robot/b2/robot_state/robot_state_client.hpp#L37-L42)
 
 **컨테이너 내부 · 두 번째 셸에서 보행기 추정값 구독**
 
 ```bash
-export PYTHONPATH="/workspace/jsj-teleop-src/src${PYTHONPATH:+:$PYTHONPATH}"
 g1 teleop --feedback --interface eth0 --domain 0
 ```
 
@@ -94,7 +74,7 @@ docker exec -it jsj-g1-tools bash
 g1 teleop --preview --interface eth0 --domain 0
 ```
 
-시작 화면의 **`[시작 시점 실측]`** 두 줄에서 실제 FSM과 응답 서비스(`sport` 또는 `loco`), `q/dq 수신 29/29 슬롯`, 왼쪽 무릎의 위치(rad)와 속도(rad/s)를 확인한다. `29/29`는 수신한 한 샘플에서 전체 29개 슬롯의 위치·속도가 유한한 값이라는 뜻이다. 이후의 **`[모의]`** 출력은 키보드 입력으로 바뀌는 모의 상태와 명령값이다.
+시작 화면의 **`[시작 시점 실측]`** 두 줄에서 실제 FSM과 고정 버전 SDK의 응답 서비스(`sport`), `q/dq 수신 29/29 슬롯`, 왼쪽 무릎의 위치(rad)와 속도(rad/s)를 확인한다. `29/29`는 수신한 한 샘플에서 전체 29개 슬롯의 위치·속도가 유한한 값이라는 뜻이다. 이후의 **`[모의]`** 출력은 키보드 입력으로 바뀌는 모의 상태와 명령값이다.
 
 시작 화면에 각 숫자 키의 자세·보행 모드와 4/5번의 제자리걸음 설정이 표시된다. 영문 입력 상태에서 아래 키를 한 번씩 누른다. 모드 선택만 `Enter`로 확인한다.
 

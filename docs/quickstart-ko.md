@@ -35,9 +35,11 @@ docker run --pull never --rm --runtime=runc --network none --cap-drop ALL --secu
 docker exec -it jsj-g1-tools bash
 ```
 
+<a id="update-tools"></a>
+
 ## 2. 기존 컨테이너에서 최신 jsj 소스 사용
 
-기존 텔레옵과 카메라 세션을 끝낸 뒤 한 셸에서 갱신한다. 체크아웃은 컨테이너 안에 저장된다. 새 이미지에 포함된 버전을 그대로 쓸 때는 이 절을 건너뛴다.
+기존 텔레옵과 카메라 세션을 끝낸 뒤 한 셸에서 갱신한다. 체크아웃과 빌드 결과는 컨테이너 안에 저장된다. 기존 통합 이미지에 설치된 공식 C++ SDK(`/opt/unitree_robotics`)로 텔레옵 호출부를 빌드한다. 새 이미지에 포함된 버전을 그대로 쓸 때는 이 절을 건너뛴다.
 
 **G1 컨테이너 내부 · 터미널 1 · 최초 체크아웃 또는 업데이트**
 
@@ -52,18 +54,22 @@ docker exec -it jsj-g1-tools bash
   else
     git clone --depth 1 --branch jsj https://github.com/tokengeoji/g1-edu-loco.git "$src"
   fi
+  cmake -S "$src/src/g1_teleop/native" -B /tmp/g1-loco-build \
+    -Dunitree_sdk2_DIR=/opt/unitree_robotics/lib/cmake/unitree_sdk2 -DCMAKE_BUILD_TYPE=Release
+  cmake --build /tmp/g1-loco-build --parallel 2
+  cmake --install /tmp/g1-loco-build --prefix /workspace/jsj-teleop-native
   git -C "$src" log -1 --oneline
 )
 ```
 
-마지막 줄에 적용할 커밋이 출력됐는지 확인한다. **기존 이미지에서 갱신한 경우 새 PC2 셸을 열 때마다** 다음 블록을 먼저 실행한다. 두 경로 모두 `/workspace/jsj-teleop-src/src/` 아래를 가리켜야 한다.
+마지막 줄에 적용할 커밋이 출력됐는지 확인한다. **기존 이미지에서 갱신한 경우 새 PC2 셸을 열 때마다** 다음 블록을 먼저 실행한다. C++ 모듈은 `/workspace/jsj-teleop-native/`, 두 Python 패키지는 `/workspace/jsj-teleop-src/src/` 아래를 가리켜야 한다.
 
 **G1 컨테이너 내부 · 터미널마다**
 
 ```bash
-export PYTHONPATH="/workspace/jsj-teleop-src/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="/workspace/jsj-teleop-src/src:/workspace/jsj-teleop-native${PYTHONPATH:+:$PYTHONPATH}"
 cd /workspace
-python3 -c 'from pathlib import Path; import g1_teleop, g1stairs; print(Path(g1_teleop.__file__).resolve(), Path(g1stairs.__file__).resolve(), sep="\n")'
+python3 -c 'from pathlib import Path; import _g1_loco, g1_teleop, g1stairs; print(*(Path(m.__file__).resolve() for m in (_g1_loco, g1_teleop, g1stairs)), sep="\n")'
 ```
 
 ## 3. 온도와 텔레옵

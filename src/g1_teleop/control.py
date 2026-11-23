@@ -107,8 +107,8 @@ class Controller:
         return self._moving_key
 
     @staticmethod
-    def _check(operation, code, *, allow_none=False):
-        if code != 0 and not (allow_none and code is None):
+    def _check(operation, code):
+        if type(code) is not int or code != 0:
             raise RuntimeError(f"{operation} RPC code={code}")
 
     def _fsm(self):
@@ -129,7 +129,7 @@ class Controller:
             if self.timed_velocity:
                 self._check("SetVelocity(0)", self.client.SetVelocity(0.0, 0.0, 0.0, PULSE_SECONDS))
             else:
-                self._check("StopMove", self.client.StopMove(), allow_none=True)
+                self._check("StopMove", self.client.StopMove())
         self._moving_key = None
         summary = (f" · 이동 입력 {self._input_count}회 · 속도 RPC 수락 {self._accepted_count}회"
                    if self._input_count else "")
@@ -257,7 +257,7 @@ class Controller:
         if self.timed_velocity:
             self._check("SetVelocity(7105)", self.client.SetVelocity(vx, vy, yaw, duration))
         else:
-            self._check("Move(7105)", self.client.Move(vx, vy, yaw), allow_none=True)
+            self._check("Move(7105)", self.client.Move(vx, vy, yaw))
         self._accepted_count += 1
         if not repeated:
             if self.timed_velocity:

@@ -118,7 +118,7 @@ g1 teleop --live --interface eth0 --domain 0
 | `v` → `Enter` / `2` → `Enter` | 일반 보행(FSM 500) 요청 / 메뉴에 표시된 Run(801 또는 802) 요청 |
 | `f` / `?` | 현재 FSM 조회 / 전체 키 안내 |
 
-기본 배율에서 `i` 한 번은 Unitree 공식 예제와 같은 `Move(0.3, 0, 0)`, `,`는 `Move(-0.3, 0, 0)`을 요청한다. 추가 속도 옵션은 필요 없다. 순수 전후진은 배율을 낮춰 줄일 수 있고 상한은 0.30 m/s다. `--straight-speed`를 명시하면 해당 값으로 고정된다. 각 이동 요청은 전송 시점부터 1초간 유효하며 같은 키의 새 반복 입력은 최대 10 Hz로 전송한다. 마지막 입력에서 1초가 지나거나 `k`를 누르면 `StopMove()`를 호출한다. 이전 타이머 재전송 방식은 `--timed-velocity`로 선택한다. [공식 전진 예제](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/example/g1/high_level/g1_loco_client_example.py#L92-L97)
+실기체에서는 공식 C++ SDK가 지정한 `sport` 서비스로 요청을 보낸다. 기본 배율에서 `i` 한 번은 Unitree 공식 Python 예제와 같은 `Move(0.3, 0, 0)`, `,`는 `Move(-0.3, 0, 0)`을 요청한다. 추가 속도 옵션은 필요 없다. 순수 전후진은 배율을 낮춰 줄일 수 있고 상한은 0.30 m/s다. `--straight-speed`를 명시하면 해당 값으로 고정된다. 각 이동 요청은 전송 시점부터 1초간 유효하며 같은 키의 새 반복 입력은 최대 10 Hz로 전송한다. 마지막 입력에서 1초가 지나거나 `k`를 누르면 `StopMove()`를 호출한다. 이전 타이머 재전송 방식은 `--timed-velocity`로 선택한다. [공식 전진 예제](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/example/g1/high_level/g1_loco_client_example.py#L92-L97)
 
 11월 23일에 기록한 두 시험에서는 FSM 802의 순수 전후진 ±0.15 m/s에서 발걸음이 관측되지 않았다. `g1 teleop --feedback --interface eth0 --domain 0`의 시작 전방 변위와 현장 발걸음으로 실제 이동을 확인한다. 일반 보행을 선택한 경우에는 FSM 500 확인 뒤 다음 이동 키가 전송된다. ROS 2 키 배치에서 `w`는 선속도 증가, `m`은 후진 선회, `x`는 선속도 감소다. [키 배치와 이후 전진 관찰](src/g1_teleop/README.md#no-motion)
 
@@ -134,7 +134,7 @@ g1 teleop --live --interface eth0 --domain 0
 G1_CAMERA_IFACE=eth0 G1_CAMERA_DOMAIN=0 g1 camera start
 ```
 
-현장에서는 `eth0`·도메인 0에서 전방 DDS 토픽 `rt/frontvideostream`의 발행자를 발견했고, 5초간 받은 유효 표본은 0개였다. 표준 ROS 영상, DDS 영상 바이트, USB 깊이 프레임을 한 번에 확인하려면 아래 명령을 사용한다. [결과 해석과 실제 깊이 영상 확인](docs/camera-check.md)
+현장 `eth0`·도메인 0에서 고정 SDK 메시지로는 `rt/frontvideostream` 표본을 받지 못했지만, 같은 이름으로 기체가 광고한 메시지 형식으로는 5.1초간 영상 패킷 148개를 받았다. 이 관측에서 머리 D435i의 원시 깊이는 확인되지 않았다. 표준 ROS 영상, DDS 영상 바이트, USB 깊이 프레임을 한 번에 확인하려면 아래 명령을 사용한다. [결과 해석과 실제 깊이 영상 확인](docs/camera-check.md)
 
 **컨테이너 내부 · 헤드 카메라 수신 검사**
 
@@ -261,7 +261,7 @@ head -n 1 "/workspace/runs/$RUN_ID/geometry/stairs.jsonl"
 | 디렉터리 | 역할과 사용 API |
 | --- | --- |
 | [src/g1_health_monitor](src/g1_health_monitor/) | 동작을 확인한 연구실 C++ 소스·CMake를 사용한다. Unitree SDK2의 `ChannelSubscriber`, `LowState_`, `BmsState_`로 모터·배터리 상태를 수신한다. [공식 C++ SDK](https://github.com/unitreerobotics/unitree_sdk2/tree/aaf69cb56c9d5ed63d8b284008ec3a8ab999bec1) |
-| [src/g1_teleop](src/g1_teleop/) | 공식 Python `LocoClient`의 보행·모드 명령을 호출하는 키보드 입력기. 기본 이동·정지는 `Move`와 `StopMove`, `--timed-velocity`는 기한을 지정한 `SetVelocity`를 사용한다. [공식 Python SDK](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/unitree_sdk2py/g1/loco/g1_loco_client.py) |
+| [src/g1_teleop](src/g1_teleop/) | 실기체 보행은 Unitree C++ `LocoClient`의 `Move`, `StopMove`, `SetFsmId`를 직접 호출한다. `--timed-velocity`에서는 `SetVelocity`에 유효시간을 지정한다. Python은 키 입력·타이머·화면을 처리한다. [C++ 호출부](src/g1_teleop/native/) · [공식 SDK 헤더](https://github.com/unitreerobotics/unitree_sdk2/blob/aaf69cb56c9d5ed63d8b284008ec3a8ab999bec1/include/unitree/robot/g1/loco/g1_loco_client.hpp) |
 | [src/g1stairs/monitoring](src/g1stairs/monitoring/) | Unitree SDK2 Python 상태 구독, 기록, 웹 대시보드 |
 | [src/g1stairs/camera](src/g1stairs/camera/) | USB는 RealSense SDK 2.0(`pyrealsense2`), ROS 영상은 Foxy `rclpy`와 `sensor_msgs`, DDS 진단은 Eclipse Cyclone DDS. [Unitree 카메라 가이드](https://support.unitree.com/home/en/G1_developer/depth_camera_instruction) · [ROS 2 CameraInfo](https://github.com/ros2/common_interfaces/blob/foxy/sensor_msgs/msg/CameraInfo.msg) |
 | [src/g1stairs/geometry](src/g1stairs/geometry/) | 공식 RealSense SDK의 역투영으로 미터 단위 3D 좌표를 구한 뒤, 프로젝트 알고리즘이 수평면과 관측된 경계를 찾아 계단 치수를 계산한다. [RealSense 좌표 변환](https://github.com/realsenseai/librealsense/wiki/Projection-in-RealSense-SDK-2.0) |

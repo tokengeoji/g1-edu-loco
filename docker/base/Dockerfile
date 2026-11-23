@@ -139,6 +139,13 @@ RUN chmod 0755 /usr/local/bin/g1_health_monitor && \
     ! grep -q 'not found' /tmp/health-libs
 
 COPY src/g1_teleop/ ./g1_teleop/
+RUN cmake -S g1_teleop/native -B /tmp/g1-loco-build \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/g1-tools \
+        -Dunitree_sdk2_DIR=/opt/unitree_robotics/lib/cmake/unitree_sdk2 && \
+    cmake --build /tmp/g1-loco-build --parallel 2 && \
+    cmake --install /tmp/g1-loco-build && \
+    python3 -c 'import _g1_loco; assert callable(_g1_loco.connect)' && \
+    rm -rf /tmp/g1-loco-build
 COPY src/g1stairs/ ./g1stairs/
 COPY config/ ./config/
 COPY docker/tools/g1 /usr/local/bin/g1

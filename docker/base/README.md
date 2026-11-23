@@ -26,7 +26,7 @@ docker image inspect g1-jsj:base --format '{{.Os}}/{{.Architecture}} {{.Id}} {{w
 | 운영체제·언어 | Ubuntu 20.04 ARM64, Python 3.8, GCC 9 |
 | ROS 2 | Foxy ros-base, sensor_msgs, ros2 CLI |
 | 통신 | Cyclone DDS C 및 Python 0.10.2, Foxy rmw_cyclonedds_cpp |
-| Unitree | Unitree SDK2 C++ 및 Python, unitree_hg·unitree_go·unitree_api 메시지 |
+| Unitree | 실기체 텔레옵용 Unitree SDK2 C++ `LocoClient`, 상태 구독용 Python SDK, unitree_hg·unitree_go·unitree_api 메시지 |
 | 운영 도구 | `g1 health` · `g1 teleop` · `g1 camera` · `g1 stairs` |
 
 ## G1 호스트에서 운영 컨테이너 접속
@@ -51,8 +51,9 @@ dpkg --print-architecture
 printenv ROS_DISTRO RMW_IMPLEMENTATION
 python3 -c 'from importlib.metadata import version; import rclpy; print(version("cyclonedds"), rclpy.get_rmw_implementation_identifier())'
 ros2 pkg prefix unitree_hg
+python3 -c 'import _g1_loco; print(_g1_loco.__file__)'
 g1 --help
 g1 interfaces
 ```
 
-출력에서 Ubuntu 20.04, arm64, foxy, 0.10.2, rmw_cyclonedds_cpp 및 Unitree 메시지 경로를 확인한다. NIC 목록에서는 로봇과 같은 네트워크에 연결된 유선 인터페이스를 확인한다. [공식 SDK 버전과 적용 범위](../../README.md#sdk)
+출력에서 Ubuntu 20.04, arm64, foxy, 0.10.2, rmw_cyclonedds_cpp 및 Unitree 메시지 경로를 확인한다. `_g1_loco` 경로가 출력되면 기체 연결 없이 텔레옵용 C++ 모듈을 불러온 것이다. NIC 목록에서는 로봇과 같은 네트워크에 연결된 유선 인터페이스를 확인한다. [공식 SDK 버전과 적용 범위](../../README.md#sdk)

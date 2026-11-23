@@ -76,36 +76,30 @@ class DiscoveryTests(unittest.TestCase):
     @patch.object(cli.time, "sleep")
     def test_auto_uses_only_fsm_reads_and_binds_one_service(self, _sleep):
         sport = Mock()
-        sport.GetFsmId.side_effect = [(3104, None), (3104, None)]
-        loco = Mock()
-        loco.GetFsmId.return_value = (0, 500)
-        factory = Mock(side_effect=[sport, loco])
-        self.assertEqual(cli.discover("auto", factory), (loco, "loco", 500))
-        self.assertEqual(factory.call_args_list, [call("sport"), call("loco")])
+        sport.GetFsmId.side_effect = [(3104, None), (0, 500)]
+        factory = Mock(return_value=sport)
+        self.assertEqual(cli.discover("auto", factory), (sport, "sport", 500))
+        factory.assert_called_once_with()
         self.assertEqual(sport.mock_calls, [call.GetFsmId()] * 2)
-        self.assertEqual(loco.mock_calls, [call.GetFsmId()])
 
-    @patch.object(cli.time, "sleep")
-    def test_service_override_does_not_fall_back_after_failure(self, _sleep):
-        bad = Mock()
-        bad.GetFsmId.side_effect = [(3105, None), (0, None)]
-        factory = Mock(return_value=bad)
-        with self.assertRaisesRegex(RuntimeError, "loco GetFsmId code=3105.*code=0"):
+    def test_legacy_loco_endpoint_is_rejected_before_any_sdk_calls(self):
+        factory = Mock()
+        with self.assertRaisesRegex(RuntimeError, "loco.*Unitree G1 LocoClient"):
             cli.discover("loco", factory)
-        factory.assert_called_once_with("loco")
+        factory.assert_not_called()
 
     @patch.object(cli.time, "sleep")
     def test_discovery_rejects_unknown_negative_fsm(self, _sleep):
         bad = Mock()
         bad.GetFsmId.return_value = (0, -1)
         with self.assertRaisesRegex(RuntimeError, "sport GetFsmId code=0, FSM=-1"):
-            cli.discover("sport", lambda _: bad)
+            cli.discover("sport", lambda: bad)
         self.assertEqual(bad.mock_calls, [call.GetFsmId()] * 2)
 
     def test_status_reports_discovered_fsm_without_control_or_tty(self):
         output = io.StringIO()
         client = Mock()
-        with patch.object(cli, "connect", return_value=(client, "loco", 4)) as connect, \
+        with patch.object(cli, "connect", return_value=(client, "sport", 4)) as connect, \
                 patch(__package__ + ".status.status_details", return_value="SDK 상태") as details, \
                 patch(__package__ + ".services.motion_service_details", return_value="서비스 상태") as services:
             with patch.dict(os.environ, ROS_DOMAIN_ID="8"), contextlib.redirect_stdout(output):
@@ -113,10 +107,10 @@ class DiscoveryTests(unittest.TestCase):
         connect.assert_called_once_with(8, "eth0", "auto")
         self.assertEqual(client.mock_calls, [])
         details.assert_called_once_with(client)
-        services.assert_called_once_with()
+        services.assert_called_once_with(client)
         self.assertIn("서비스 상태", output.getvalue())
         self.assertIn("SDK 상태", output.getvalue())
-        self.assertIn("현재 FSM=4 (잠금 기립) · NIC=eth0 · DDS domain=8 · service=loco", output.getvalue())
+        self.assertIn("현재 FSM=4 (잠금 기립) · NIC=eth0 · DDS domain=8 · service=sport", output.getvalue())
 
     def test_feedback_is_read_only_and_needs_no_tty_or_loco_rpc(self):
         with patch(__package__ + ".feedback.watch_odometry") as observe, patch.object(cli, "connect") as connect:

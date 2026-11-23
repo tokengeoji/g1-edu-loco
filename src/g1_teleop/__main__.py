@@ -73,70 +73,50 @@ class DryClient:
 
     def Move(self, vx, vy, yaw):
         print(f"[모의] Move({vx}, {vy}, {yaw})", flush=True)
+        return 0
 
     def StopMove(self):
         print("[모의] StopMove()", flush=True)
+        return 0
 
     def SetVelocity(self, vx, vy, yaw, duration):
         print(f"[모의] SetVelocity({vx}, {vy}, {yaw}, {duration:.3f})", flush=True)
         return 0
 
 
-def sdk_client(service):
-    from unitree_sdk2py.g1.loco.g1_loco_api import LOCO_SERVICE_NAME
+def sdk_client():
+    # Preview shares the Python DDS channel used to read its motor snapshot.
     from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
 
-    class CheckedLocoClient(LocoClient):
-        def SetVelocity(self, vx, vy, omega, duration=1.0):
-            # The official Move and StopMove discard SetVelocity's return value.
-            # Propagate a rejected RPC before either can return apparent success.
-            code = super().SetVelocity(vx, vy, omega, duration)
-            if code != 0:
-                raise RuntimeError(f"SetVelocity(7105) RPC code={code}")
-            return code
-
-    if service == LOCO_SERVICE_NAME:
-        client = CheckedLocoClient()
-    elif service == "loco":
-        from unitree_sdk2py.rpc.client import Client
-
-        class LegacyLocoClient(CheckedLocoClient):
-            def __init__(self):
-                # Before ai_sport 8.2 Unitree used this endpoint for the same
-                # RPCs. Inherit the pinned SDK's Init and all locomotion methods.
-                Client.__init__(self, "loco", False)
-
-        client = LegacyLocoClient()
-    else:
-        raise ValueError(f"Unsupported G1 locomotion service: {service}")
+    client = LocoClient()
     client.SetTimeout(0.5)
     client.Init()
     return client
 
 
 def discover(service, make_client=sdk_client):
-    names = ("sport", "loco") if service == "auto" else (service,)
+    if service not in ("auto", "sport"):
+        raise RuntimeError(f"{service} 서비스는 이 버전의 Unitree G1 LocoClient에서 지원하지 않습니다. "
+                           "--service sport를 사용하세요.")
+    client = make_client()
     failures = []
-    for name in names:
-        client = make_client(name)
-        for attempt in range(2):
-            if attempt:
-                time.sleep(0.25)  # Allow cold DDS endpoints time to match.
-            try:
-                code, fsm = client.GetFsmId()
-                if code == 0 and type(fsm) is int and fsm >= 0:
-                    return client, name, fsm
-                failures.append(f"{name} GetFsmId code={code}, FSM={fsm!r}")
-            except Exception as error:
-                failures.append(f"{name} GetFsmId: {error}")
+    for attempt in range(2):
+        if attempt:
+            time.sleep(0.25)  # Allow cold DDS endpoints time to match.
+        try:
+            code, fsm = client.GetFsmId()
+            if code == 0 and type(fsm) is int and fsm >= 0:
+                return client, "sport", fsm
+            failures.append(f"sport GetFsmId code={code}, FSM={fsm!r}")
+        except Exception as error:
+            failures.append(f"sport GetFsmId: {error}")
     raise RuntimeError(" / ".join(failures))
 
 
 def connect(domain, interface, service):
-    from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+    from _g1_loco import connect as native_connect
 
-    ChannelFactoryInitialize(domain, interface)
-    return discover(service)
+    return discover(service, lambda: native_connect(domain, interface))
 
 
 LIVE_LOCK = "/run/g1-tools/teleop.lock"
@@ -374,8 +354,8 @@ def main(argv=None):
     parser.add_argument("--interface", metavar="NIC", help="G1 연결 인터페이스")
     parser.add_argument("--domain", type=int, default=os.getenv("ROS_DOMAIN_ID") or "0",
                         help="DDS 도메인 ID (기본 ROS_DOMAIN_ID 또는 0)")
-    parser.add_argument("--service", choices=("auto", "sport", "loco"), default="auto",
-                        help="GetFsmId로 확인할 로코모션 서비스 (기본 auto)")
+    parser.add_argument("--service", choices=("auto", "sport"), default="auto",
+                        help="공식 G1 LocoClient 서비스 sport (기본 auto와 동일). 구형 loco는 지원하지 않습니다.")
     parser.add_argument("--run-fsm", type=int, choices=RUN_IDS,
                         help="2번 키로 요청할 Run ID (기본: 시작 시 확인된 801/802, 그 외에는 연구실 802)")
     parser.add_argument("--waist-3dof", action="store_true", help="허리 3자유도 모델의 FSM 501 허용")
@@ -426,7 +406,7 @@ def main(argv=None):
                     from .services import motion_service_details
                     from .status import status_details
                     show(status_details(client))
-                    show(motion_service_details())
+                    show(motion_service_details(client))
                     return 0
             else:
                 client = DryClient()

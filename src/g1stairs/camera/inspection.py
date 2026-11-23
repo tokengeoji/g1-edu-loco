@@ -152,6 +152,36 @@ def _load_idl(qualified_name):
         raise CameraError(f"IDL_CLASS_UNAVAILABLE: {qualified_name}: {error}") from error
 
 
+def _writer_type(participant, writer, idl_class, seconds):
+    from cyclonedds.core import DDSException
+    from cyclonedds.dynamic import get_types_for_typeid
+    from cyclonedds.util import duration
+
+    front = (writer.topic_name, writer.type_name) == (FRONT_VIDEO_TOPIC, FRONT_VIDEO_TYPE)
+    if idl_class or front:
+        try:
+            selected = _load_idl(idl_class or FRONT_VIDEO_IDL)
+        except CameraError:
+            if idl_class or writer.type_id is None:
+                raise
+        else:
+            if writer.type_id is None or selected.__idl__.get_type_id() == writer.type_id:
+                return selected, "explicit" if idl_class else "unitree_sdk"
+            if idl_class:
+                raise CameraError("DDS_TYPE_MISMATCH: selected IDL differs from the writer's advertised "
+                                  "type identifier; omit --idl-class to use the writer's definition")
+    if writer.type_id is None:
+        raise CameraError("DDS_IDL_REQUIRED: writer did not advertise a type ID; supply its installed --idl-class")
+    try:
+        selected, _ = get_types_for_typeid(participant, writer.type_id, duration(seconds=seconds))
+    except DDSException as exc:
+        raise CameraError(f"DDS_IDL_REQUIRED: cannot resolve the writer's advertised type; "
+                          f"supply its matching installed --idl-class: {exc}") from exc
+    if selected.__idl__.get_type_id() != writer.type_id:
+        raise CameraError("DDS_TYPE_MISMATCH: discovered definition differs from the writer's advertised type ID")
+    return selected, "writer_type"
+
+
 def _read_dds_samples(reader, typename, seconds, verbose):
     front_video = typename == FRONT_VIDEO_TYPE
     payload_samples = 0
@@ -163,8 +193,13 @@ def _read_dds_samples(reader, typename, seconds, verbose):
             if not sample.sample_info.valid_data:
                 continue
             count += 1
-            if front_video and any(len(data) for data in (sample.video720p, sample.video360p, sample.video180p)):
-                payload_samples += 1
+            if front_video:
+                # The lab writer exposes resolution/data. The pinned Unitree IDL has three streams.
+                if hasattr(sample, "resolution") and hasattr(sample, "data"):
+                    payload_samples += bool(sample.data)
+                else:
+                    payload_samples += any(getattr(sample, field, ()) for field in
+                                           ("video720p", "video360p", "video180p"))
             if verbose and time.monotonic() >= next_report:
                 fields = _field_preview(sample) if dataclasses.is_dataclass(sample) else {"idl_type": typename}
                 print(json.dumps({"sample": count, "fields": fields}, ensure_ascii=False), flush=True)
@@ -176,11 +211,9 @@ def _read_dds_samples(reader, typename, seconds, verbose):
 def tty_dds(args, *, verbose=True):
     from cyclonedds.core import DDSException, Listener
     from cyclonedds.domain import DomainParticipant
-    from cyclonedds.dynamic import get_types_for_typeid
     from cyclonedds.qos import Policy, Qos
     from cyclonedds.sub import DataReader, Subscriber
     from cyclonedds.topic import Topic
-    from cyclonedds.util import duration
 
     participant = DomainParticipant(_domain_id())
     publications = _publication_reader(participant)
@@ -194,15 +227,7 @@ def tty_dds(args, *, verbose=True):
             if time.monotonic() >= ends:
                 raise CameraError("DDS_WRITER_NOT_FOUND: check the topic, type, domain and interface")
             time.sleep(0.05)
-        if args.idl_class:
-            data_type = _load_idl(args.idl_class)
-        elif match.type_id is not None:
-            try:
-                data_type, _ = get_types_for_typeid(participant, match.type_id, duration(seconds=args.seconds))
-            except DDSException as exc:
-                raise CameraError(f"DDS_IDL_REQUIRED: use --idl-class with the publisher's installed IDL: {exc}") from exc
-        else:
-            raise CameraError("DDS_IDL_REQUIRED: writer did not advertise a type ID; supply its installed --idl-class")
+        data_type, idl_source = _writer_type(participant, match, args.idl_class, args.seconds)
         topic = Topic(participant, args.topic, data_type)
         if topic.typename != args.type:
             raise CameraError(f"DDS_TYPE_MISMATCH: selected IDL is {topic.typename}, writer uses {args.type}")
@@ -223,7 +248,7 @@ def tty_dds(args, *, verbose=True):
         if not count and verbose:
             raise CameraError(f"DDS_NO_SAMPLES: writer and type found, no valid samples; "
                               f"reader matches={matches['total']}, incompatible QoS events={matches['incompatible_qos']}")
-        result = {"status": "DDS_SAMPLES_RECEIVED" if count else "DDS_NO_SAMPLES",
+        result = {"status": "DDS_SAMPLES_RECEIVED" if count else "DDS_NO_SAMPLES", "idl_source": idl_source,
                   "domain": _domain_id(), "topic": args.topic, "type": args.type, "samples_read": count,
                   "reader_matches": matches["total"], "incompatible_qos_events": matches["incompatible_qos"]}
         if args.type == FRONT_VIDEO_TYPE:
@@ -314,8 +339,7 @@ def check(args):
     # `discover` keeps the full DDS endpoint list; this report tests the front
     # video endpoint directly, independently of ROS discovery.
     ros.pop("dds_publications", None)
-    dds_args = SimpleNamespace(topic=FRONT_VIDEO_TOPIC, type=FRONT_VIDEO_TYPE,
-                               idl_class=FRONT_VIDEO_IDL, seconds=args.seconds)
+    dds_args = SimpleNamespace(topic=FRONT_VIDEO_TOPIC, type=FRONT_VIDEO_TYPE, idl_class=None, seconds=args.seconds)
     dds = _inspect_source(tty_dds, dds_args, verbose=False)
     usb = _inspect_source(tty_usb, args, verbose=False, preview_path=args.depth_preview)
     return {"domain": _domain_id(), "interface": os.getenv("G1_CAMERA_IFACE") or None,
