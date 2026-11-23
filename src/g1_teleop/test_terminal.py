@@ -22,7 +22,7 @@ from . import __main__ as cli
 class KeyboardInputTests(unittest.TestCase):
     def test_single_commands_and_complete_arrows(self):
         keys = cli.TerminalKeys()
-        for key in "uiojk lm,.UIOJKLM<>qzwxecf?+-=!@#$0123456789 \r\n":
+        for key in "uiojk lm,.UIOJKLM<>qzwxecf?+-=!@#$0123456789v \r\n":
             self.assertEqual(keys.read(key.encode()), key)
         for unused_key in b"rg":
             self.assertEqual(keys.read(bytes([unused_key])), "\x1b")
@@ -34,7 +34,7 @@ class KeyboardInputTests(unittest.TestCase):
 
     def test_ambiguous_bursts_and_reports_do_not_move_or_change_modes(self):
         keys = cli.TerminalKeys()
-        for seq in [b"ii", b"2\r", b"m\r", b"\x1b[Ai", b"i\x1b[A", b"\x1b[1;5D",
+        for seq in [b"ii", b"2\r", b"v\r", b"m\r", b"\x1b[Ai", b"i\x1b[A", b"\x1b[1;5D",
                     b"\x1bw", b"\x1b[I", b"\x1b[O", b"\x1b[", b"3", b"~",
                     b"\x1b]report", b"w", b"\x07", b"\x1b[M", b"w", b"r", b"d"]:
             self.assertEqual(keys.read(seq), "\x1b", seq)
@@ -106,12 +106,15 @@ class DiscoveryTests(unittest.TestCase):
         output = io.StringIO()
         client = Mock()
         with patch.object(cli, "connect", return_value=(client, "loco", 4)) as connect, \
-                patch(__package__ + ".status.status_details", return_value="SDK 상태") as details:
+                patch(__package__ + ".status.status_details", return_value="SDK 상태") as details, \
+                patch(__package__ + ".services.motion_service_details", return_value="서비스 상태") as services:
             with patch.dict(os.environ, ROS_DOMAIN_ID="8"), contextlib.redirect_stdout(output):
                 self.assertEqual(cli.main(["--status", "--interface", "eth0"]), 0)
         connect.assert_called_once_with(8, "eth0", "auto")
         self.assertEqual(client.mock_calls, [])
         details.assert_called_once_with(client)
+        services.assert_called_once_with()
+        self.assertIn("서비스 상태", output.getvalue())
         self.assertIn("SDK 상태", output.getvalue())
         self.assertIn("현재 FSM=4 (잠금 기립) · NIC=eth0 · DDS domain=8 · service=loco", output.getvalue())
 
@@ -155,7 +158,8 @@ with open(sys.argv[1], "a") as stream:
                         connect.assert_not_called()
                         connect.return_value = (Mock(), "sport", 500)
                         with contextlib.redirect_stdout(io.StringIO()), \
-                                patch(__package__ + ".status.status_details", return_value="SDK 상태"):
+                                patch(__package__ + ".status.status_details", return_value="SDK 상태"), \
+                                patch(__package__ + ".services.motion_service_details", return_value="서비스 상태"):
                             self.assertEqual(cli.main(["--status", "--interface", "lo"]), 0)
                 finally:
                     proc.kill()
@@ -201,12 +205,12 @@ class TerminalLoopTests(unittest.TestCase):
         self.assertEqual(self.proc.wait(timeout=3), status)
         self.assertEqual(termios.tcgetattr(self.slave), self.original)
 
-    def test_startup_shows_every_numbered_mode_and_stop_before_any_key(self):
+    def test_startup_shows_every_mode_and_stop_before_any_key(self):
         startup = " ".join(self.start().decode().split())
         for binding in ("0 댐핑 (FSM 1)", "1 잠금 기립 (FSM 4)", "2 Run 보행 (FSM 802)",
                         "3 위치 제어 쪼그림 (FSM 2)", "4 균형 기립 (균형 설정 0)",
                         "5 연속 제자리걸음 (균형 설정 1)", "6 균형 쪼그림 ↔ 기립 전환 (FSM 706)",
-                        "7/9 의자에 앉기 (FSM 3)", "8 허리 3자유도 보행 (FSM 501)"):
+                        "7/9 의자에 앉기 (FSM 3)", "8 허리 3자유도 보행 (FSM 501)", "v 일반 보행 (FSM 500)"):
             self.assertIn(binding, startup)
         self.assertIn("--waist-3dof", startup)
         self.assertIn("Ctrl+C 정지 요청 후 종료", startup)
@@ -273,6 +277,7 @@ raise SystemExit(cli.main())
         return self.start(f"""
 import fcntl
 import os
+import select
 import sys
 import termios
 import time
@@ -285,6 +290,8 @@ fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 assert os.tcgetpgrp(0) == os.getpgrp()
 
 class SpyClient:
+    fsm_reads = 0
+
     def rpc_wait(self):
         # The SDK future can catch exceptions raised in its blocking wait.
         try:
@@ -293,16 +300,22 @@ class SpyClient:
             pass
 
     def GetFsmId(self):
+        self.fsm_reads += 1
         if {delay!r} == "read":
             print("reading FSM", flush=True)
             self.rpc_wait()
+        if ({delay!r}, self.fsm_reads) in (("initial", 1), ("refresh", 2)):
+            print("waiting for key during FSM read", flush=True)
+            # Leave the byte queued so the terminal sees it before the send.
+            if not select.select([sys.stdin], [], [], 2)[0]:
+                raise RuntimeError("key did not arrive during FSM read")
         return 0, 802
 
     def SetVelocity(self, vx, vy, yaw, duration):
         command = "move" if any((vx, vy, yaw)) else "zero"
         with open({str(self.velocities)!r}, "a") as out:
             print(command, file=out)
-        print("wire " + command, flush=True)
+        print("wire " + command + " after FSM read", self.fsm_reads, flush=True)
         if command == {delay!r}:
             self.rpc_wait()
         return {zero_code} if command == "zero" else 0
@@ -345,8 +358,34 @@ sys.exit(cli.main(["--live", "--interface", "lo", "--domain", "0"]))
         self.await_output("종료 정지 · 속도 0 요청 수락")
         self.assert_restored()
         commands = self.velocities.read_text().splitlines()
-        self.assertGreater(commands.count("move"), 1)
-        self.assertEqual(commands, ["move"] * commands.count("move") + ["zero", "zero"])
+        self.assertGreater(len(commands), 3)
+        self.assertEqual(commands[:-2], ["move"] * (len(commands) - 2))
+        self.assertEqual(commands[-2:], ["zero", "zero"])
+
+    def test_stop_during_initial_or_refresh_fsm_read_preempts_velocity_send(self):
+        for delay, expected in [("initial", ["zero", "zero"]), ("refresh", ["move", "zero", "zero"])]:
+            with self.subTest(delay=delay):
+                self.start_live_spy(delay=delay)
+                os.write(self.master, b"i")
+                self.await_output("waiting for key during FSM read")
+                os.write(self.master, b"k")
+                message = self.await_output("속도 0 요청 수락.")
+                self.assertNotIn("만료".encode(), message)
+                os.write(self.master, b"\x04")
+                self.assert_restored()
+                self.assertEqual(self.velocities.read_text().splitlines(), expected)
+
+    def test_same_direction_repeat_during_initial_fsm_read_keeps_original_send(self):
+        self.start_live_spy(delay="initial")
+        os.write(self.master, b"i")
+        self.await_output("waiting for key during FSM read")
+        os.write(self.master, b"ii")
+        self.await_output("wire move after FSM read 1")
+        os.write(self.master, b"\x04")
+        self.assert_restored()
+        commands = self.velocities.read_text().splitlines()
+        self.assertEqual(commands[0], "move")
+        self.assertEqual(commands[-1], "zero")
 
     def test_failed_final_stop_reports_rpc_code_and_exits_unsuccessfully(self):
         self.start_live_spy(zero_code=4201)

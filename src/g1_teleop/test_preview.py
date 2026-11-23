@@ -118,6 +118,31 @@ class PreviewTests(unittest.TestCase):
         self.robot.GetFsmId.assert_called_once_with()
         self.connect.assert_not_called()
 
+    def test_run_selection_defaults_to_the_observed_801_in_preview(self):
+        self.robot.GetFsmId.return_value = (0, 801)
+        self.assertEqual(self.keyboard(self.args, [b"2", b"\r", b"i", b"\x04"]), 0)
+        text = self.output.getvalue()
+        self.assertIn("2 Run 보행 (FSM 801)", " ".join(text.split()))
+        self.assertNotIn("[모의] SetFsmId(", text)
+        self.assertIn("[모의] SetVelocity(7105) 수락 · FSM=801", text)
+        self.robot.GetFsmId.assert_called_once_with()
+        self.connect.assert_not_called()
+
+    def test_explicit_run_id_overrides_the_preview_selection_only(self):
+        for observed, requested in [(4, 801), (801, 802)]:
+            with self.subTest(observed=observed, requested=requested):
+                self.robot.GetFsmId.return_value = (0, observed)
+                args = self.args + ["--run-fsm", str(requested)]
+                start = self.output.tell()
+                self.assertEqual(self.keyboard(args, [b"2", b"\r", b"i", b"\x04"]), 0)
+                text = self.output.getvalue()[start:]
+                self.assertIn(f"[시작 시점 실측] 현재 FSM={observed}", text)
+                self.assertIn(f"2 Run 보행 (FSM {requested})", " ".join(text.split()))
+                self.assertIn(f"[모의] SetFsmId({requested})", text)
+                self.assertIn(f"[모의] SetVelocity(7105) 수락 · FSM={requested}", text)
+        self.assertEqual(self.robot.mock_calls, [call.GetFsmId(), call.GetFsmId()])
+        self.connect.assert_not_called()
+
     def test_timeout_or_failed_fsm_read_cannot_open_a_controller(self):
         self.sample = None
         with patch.object(preview.Receiver, "wait", return_value=None) as wait:
@@ -161,7 +186,7 @@ class PreviewTests(unittest.TestCase):
 
     def test_requires_a_nic_and_an_exclusive_execution_mode(self):
         for args in (["--preview"], self.args + ["--live"], self.args + ["--dry-run"],
-                     self.args + ["--status"]):
+                     self.args + ["--status"], self.args + ["--run-fsm", "800"]):
             with self.subTest(args=args), self.assertRaises(SystemExit) as error:
                 cli.main(args)
             self.assertEqual(error.exception.code, 2)

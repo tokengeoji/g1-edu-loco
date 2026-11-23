@@ -12,15 +12,15 @@ import time
 import tty
 from contextlib import contextmanager, nullcontext
 
-from .control import CONFIRM_SECONDS, Controller, EndSession, MODES, VELOCITY, display_fsm
+from .control import CONFIRM_SECONDS, LAB_RUN_FSM, MODES, RUN_IDS, VELOCITY, Controller, EndSession, display_fsm
 
 
-def mode_menu():
+def mode_menu(modes):
     keys_by_mode = {}
-    for key in sorted(MODES):
-        keys_by_mode.setdefault(MODES[key], []).append(key)
+    for key in sorted(modes):
+        keys_by_mode.setdefault(modes[key], []).append(key)
 
-    lines = [f"모드 선택   숫자 → {CONFIRM_SECONDS:g}초 안에 Enter · Esc 취소"]
+    lines = [f"모드 선택   숫자 또는 v → {CONFIRM_SECONDS:g}초 안에 Enter · Esc 취소"]
     for (kind, value, label), keys in keys_by_mode.items():
         target = f"FSM {value}" if kind == "fsm" else f"균형 설정 {value}"
         name = label.partition(" · ")[0]
@@ -32,22 +32,22 @@ def mode_menu():
     return "\n".join(lines)
 
 
-HELP = mode_menu() + """
+KEY_HELP = """
 이동 키
    u    i    o       전진하며 좌회전 / 전진 / 전진하며 우회전
    j    k    l       좌회전 / 정지 / 우회전
    m    ,    .       후진하며 우회전 / 후진 / 후진하며 좌회전
 Shift+J/L 옆걸음   방향키 ↑↓ 전후진 · ←→ 회전
-누르고 있으면 연속 이동 · 마지막 입력 후 최대 1초   q/z 속도 올림/내림
+이동 요청은 최대 10 Hz로 갱신 · 키 반복이 끊기면 마지막 입력 후 최대 1초   q/z 속도 올림/내림
 k 또는 Space 정지   Ctrl+C 정지 요청 후 종료   f 현재 모드   ? 전체 키"""
 
 EXTRA_HELP = """Shift+U/I/O·J/L·M/</> 회전 없이 전후·좌우 이동
 w/x 직선·옆걸음 속도 올림/내림    e/c 회전 속도 올림/내림
-!/@/#/$ FSM 802 속도 상한 0/1/2/3"""
+!/@/#/$ Run(801/802) 속도 상한 0/1/2/3"""
 
 
 class DryClient:
-    def __init__(self, fsm=802):
+    def __init__(self, fsm=LAB_RUN_FSM):
         self.fsm = fsm
 
     def GetFsmId(self):
@@ -253,9 +253,12 @@ def keyboard_terminal(fd, on_signal):
             sys.stdout.flush()
 
 
-def poll_queued(fd, keys, repeat_key):
+def poll_queued(fd, keys, repeat_key, pending=None):
     """Keep stops or one repeat of current motion, never a buffered direction change."""
-    pending = None
+    if pending == keys.exit_key:
+        return pending
+    if pending in VELOCITY and pending != repeat_key:
+        pending = "\x1b"
     while select.select([fd], [], [], 0)[0]:
         data = os.read(fd, 4096)
         key = keys.read(data, repeat_key)
@@ -281,22 +284,29 @@ def interact(controller, *, live=False):
     fd = sys.stdin.fileno()
     keys = TerminalKeys()
     prefix = "[실기체] " if live else "[모의] "
+    pending = None
 
     def input_waiting():
         return bool(select.select([fd], [], [], 0)[0])
+
+    def cancel_requested():
+        nonlocal pending
+        # A repeat during GetFsmId may renew this direction. A stop takes priority.
+        pending = poll_queued(fd, keys, key, pending)
+        return pending is not None and pending != key
 
     def request_exit(_signum, _frame):
         # The SDK catches exceptions inside its RPC wait. Latch Ctrl+C instead,
         # and let any ongoing send/receive finish before sending the final zero.
         controller.exit_requested = True
 
+    help_text = mode_menu(controller.modes) + KEY_HELP
     with keyboard_terminal(fd, request_exit):
         try:
-            show(HELP, prefix)
+            show(help_text, prefix)
             show("준비 · i 전진, k 정지", prefix)
             if live:
                 show("키 입력이 기체로 전송됩니다. 802 내장 보행기는 팔을 흔들 수 있습니다.", prefix)
-            pending = None
             while not controller.exit_requested:
                 if pending is None:
                     received_at = time.monotonic()
@@ -315,14 +325,15 @@ def interact(controller, *, live=False):
                 if key == keys.exit_key or controller.exit_requested:
                     break
                 started = time.monotonic()
-                message = controller.handle("\x1b" if key == "?" else key, received_at=received_at)
+                message = controller.handle("\x1b" if key == "?" else key, received_at=received_at,
+                                            cancel_requested=cancel_requested)
                 if controller.exit_requested:
                     break
-                pending = poll_queued(fd, keys, controller.moving_key)
+                pending = poll_queued(fd, keys, controller.moving_key, pending)
                 received_at = started  # An input waiting after the RPC may be this old.
                 show(message, prefix)
                 if key == "?":
-                    show(HELP, prefix)
+                    show(help_text, prefix)
                     show(EXTRA_HELP, prefix)
         finally:
             show(controller.close(force_stop=live), prefix)
@@ -341,6 +352,8 @@ def main(argv=None):
                         help="DDS 도메인 ID (기본 ROS_DOMAIN_ID 또는 0)")
     parser.add_argument("--service", choices=("auto", "sport", "loco"), default="auto",
                         help="GetFsmId로 확인할 로코모션 서비스 (기본 auto)")
+    parser.add_argument("--run-fsm", type=int, choices=RUN_IDS,
+                        help="2번 키로 요청할 Run ID (기본: 시작 시 확인된 801/802, 그 외에는 연구실 802)")
     parser.add_argument("--waist-3dof", action="store_true", help="허리 3자유도 모델의 FSM 501 허용")
     args = parser.parse_args(argv)
     if (args.live or args.preview or args.status or args.feedback) and not args.interface:
@@ -380,8 +393,10 @@ def main(argv=None):
                     return 0
             else:
                 client = DryClient()
-                show(f"오프라인 모의 제어 · 초기 FSM={display_fsm(client.fsm)}")
-            controller = Controller(client, waist_3dof=args.waist_3dof)
+                fsm = client.fsm
+                show(f"오프라인 모의 제어 · 초기 FSM={display_fsm(fsm)}")
+            default_run = fsm if fsm in RUN_IDS else LAB_RUN_FSM
+            controller = Controller(client, waist_3dof=args.waist_3dof, run_fsm=args.run_fsm or default_run)
             interact(controller, live=args.live)
     except EndSession:
         return 0
