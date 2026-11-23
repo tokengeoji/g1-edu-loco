@@ -40,7 +40,7 @@ KEY_HELP = """
    m    ,    .       후진하며 우회전 / 후진 / 후진하며 좌회전
 ← / → = 소문자 j / l  ·  제자리 회전 요청 (vx=vy=0)
 대문자 J / L (Shift+j / Shift+l)  ·  왼쪽 / 오른쪽 옆걸음 요청 (vx=yaw=0)
-↑ / ↓ = i / ,  ·  전진 / 후진 요청
+↑ / ↓ = i / ,  ·  전진 / 후진 요청 (vy=yaw=0)
 q/z 속도 올림/내림
 k 또는 Space 정지   Ctrl+C 정지 요청 후 종료   f 현재 모드   ? 전체 키
 속도 요청 수락은 보행 서비스의 응답입니다. 실제 발걸음과 회전은 현장에서 확인하세요."""
@@ -325,12 +325,9 @@ def interact(controller, *, live=False):
     else:
         help_text += "\nUnitree Move · 새 키와 누르고 있는 키의 반복 입력에만 전송합니다 (최대 10 Hz)."
     help_text += "\n마지막 키 입력 후 1초에 정지를 요청합니다."
-    if controller.straight_speed is not None:
-        help_text += (f"\n직진·후진 고정 속도 ±{controller.straight_speed:.3f} m/s · "
-                      "i/, 또는 ↑/↓ · 횡속도 0 · 회전속도 0")
     with keyboard_terminal(fd, request_exit):
         try:
-            show(help_text, prefix)
+            show(help_text + "\n" + controller.speed_summary(), prefix)
             show("준비 · i 전진, k 정지", prefix)
             if live:
                 show("키 입력이 기체로 전송됩니다. 802 내장 보행기는 팔을 흔들 수 있습니다.", prefix)
@@ -360,7 +357,7 @@ def interact(controller, *, live=False):
                 received_at = started  # An input waiting after the RPC may be this old.
                 show(message, prefix)
                 if key == "?":
-                    show(help_text, prefix)
+                    show(help_text + "\n" + controller.speed_summary(), prefix)
                     show(EXTRA_HELP, prefix)
         finally:
             show(controller.close(force_stop=live), prefix)
@@ -386,7 +383,8 @@ def main(argv=None):
                         help="이전 SetVelocity 방식으로 남은 유효시간을 갱신 (기본: Unitree Move / StopMove)")
     parser.add_argument("--straight-speed", type=float, metavar="M/S",
                         help=f"직진·후진의 속도 크기만 고정 (0 초과~{MAX_STRAIGHT_SPEED:.2f} m/s). "
-                             "생략하면 기본 0.15 m/s에 키 배율 적용")
+                             f"생략하면 기본 {MAX_STRAIGHT_SPEED:.2f} m/s에 선속도 배율 적용 "
+                             f"(상한 {MAX_STRAIGHT_SPEED:.2f} m/s)")
     args = parser.parse_args(argv)
     if (args.live or args.preview or args.status or args.feedback) and not args.interface:
         parser.error("--live / --preview / --status / --feedback 실행에는 --interface NIC가 필요합니다.")

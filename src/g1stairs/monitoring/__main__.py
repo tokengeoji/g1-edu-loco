@@ -5,12 +5,14 @@ import json
 import math
 import sys
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 from g1stairs.session import create_part, dump_line, read_json, read_jsonl, run_path
 
 from .dashboard import Live, Recording, serve
 from .telemetry import TEMPERATURE_PERIOD_S, TOPIC, Receiver, Temperatures, serialize, subscribe
+from .teleop_trace import record_teleop
 
 
 ROBOT_PROFILE = "g1-29"
@@ -64,10 +66,15 @@ def record(args):
     temperatures = Temperatures()
     receiver = Receiver()
     with create_part(args.runs_dir, args.run, "state", metadata) as path:
-        with subscribe(args.nic, args.domain, receiver):
+        with ExitStack() as subscriptions:
+            subscriptions.enter_context(subscribe(args.nic, args.domain, receiver))
+            trace = subscriptions.enter_context(record_teleop(path, metadata)) if args.with_teleop else None
+            if trace is not None:
+                print("7105 요청·보행 상태 구독 시작 · 첫 LowState 표본 대기", flush=True)
             sample = wait_for_first(receiver, args.timeout_s)
             first_ns = sample[0]
-            end_ns = first_ns + max(1, int(args.seconds * 1_000_000_000))
+            start_ns = max(first_ns, trace.ready_ns) if trace is not None else first_ns
+            end_ns = start_ns + max(1, int(args.seconds * 1_000_000_000))
             count = 0
             last_ns = first_ns
             max_gap_ns = 0
@@ -75,6 +82,8 @@ def record(args):
                 while sample is not None and sample[0] < end_ns:
                     received_ns, message = sample
                     dump_line(stream, serialize(message, received_ns, temperatures))
+                    if trace is not None:
+                        trace.drain()
                     count += 1
                     max_gap_ns = max(max_gap_ns, received_ns - last_ns)
                     last_ns = received_ns
@@ -142,6 +151,8 @@ def parser():
             sub.add_argument("--timeout-s", type=positive, default=5.0)
         if name == "record":
             sub.add_argument("--seconds", type=positive, default=10.0)
+            sub.add_argument("--with-teleop", action="store_true",
+                             help="also record received Move/stop requests and HG gait state transitions")
         if name == "serve":
             sub.add_argument("--bind", default="127.0.0.1")
             sub.add_argument("--port", type=positive_int, default=8765)

@@ -10,17 +10,17 @@ import time
 PULSE_SECONDS = 1.0
 REPEAT_INTERVAL = 0.1
 CONFIRM_SECONDS = 4.0
-# Existing maximum pure-x speed (0.15 m/s at 2×) and Unitree's example forward speed.
+# Unitree's example forward speed is also the operator's pure-x limit.
 MAX_STRAIGHT_SPEED = 0.30
 # ROS 2 teleop_twist_keyboard's planar keys. Axes: forward (m/s), left (m/s),
-# left turn (rad/s). G1 retains its existing, conservative starting velocities.
+# left turn (rad/s).
 VELOCITY = {
-    "u": (0.15, 0.0, 0.3), "i": (0.15, 0.0, 0.0), "o": (0.15, 0.0, -0.3),
+    "u": (0.15, 0.0, 0.3), "i": (MAX_STRAIGHT_SPEED, 0.0, 0.0), "o": (0.15, 0.0, -0.3),
     "j": (0.0, 0.0, 0.3),                           "l": (0.0, 0.0, -0.3),
-    "m": (-0.15, 0.0, -0.3), ",": (-0.15, 0.0, 0.0), ".": (-0.15, 0.0, 0.3),
-    "U": (0.15, 0.10, 0.0), "I": (0.15, 0.0, 0.0), "O": (0.15, -0.10, 0.0),
+    "m": (-0.15, 0.0, -0.3), ",": (-MAX_STRAIGHT_SPEED, 0.0, 0.0), ".": (-0.15, 0.0, 0.3),
+    "U": (0.15, 0.10, 0.0), "I": (MAX_STRAIGHT_SPEED, 0.0, 0.0), "O": (0.15, -0.10, 0.0),
     "J": (0.0, 0.10, 0.0),                           "L": (0.0, -0.10, 0.0),
-    "M": (-0.15, 0.10, 0.0), "<": (-0.15, 0.0, 0.0), ">": (-0.15, -0.10, 0.0),
+    "M": (-0.15, 0.10, 0.0), "<": (-MAX_STRAIGHT_SPEED, 0.0, 0.0), ">": (-0.15, -0.10, 0.0),
 }
 SPEED_FACTORS = {
     "q": (1.1, 1.1), "z": (0.9, 0.9),
@@ -146,14 +146,21 @@ class Controller:
             return f"RPC 오류: {error}. 속도 0 응답도 확인하지 못했습니다: {stop_error}. 조종기를 확인하세요."
         return f"RPC 오류: {error}. 직전 명령을 중단했습니다. 다음 입력에서 기체 상태를 다시 확인합니다."
 
-    def _speed_summary(self):
-        text = f"선속도 {self.linear_scale:g}배 · 회전 {self.turn_scale:g}배"
+    @property
+    def effective_straight_speed(self):
         if self.straight_speed is not None:
-            text += f" · 직진·후진 고정 ±{self.straight_speed:.3f} m/s"
-        return text
+            return self.straight_speed
+        return min(VELOCITY["i"][0] * self.linear_scale, MAX_STRAIGHT_SPEED)
+
+    def speed_summary(self):
+        scales = f"선속도 {self.linear_scale:g}배 · 회전 {self.turn_scale:g}배"
+        if self.straight_speed is not None:
+            return f"{scales} · 직진·후진 고정 속도 ±{self.effective_straight_speed:.3f} m/s"
+        return (f"{scales} · 직진·후진 ±{self.effective_straight_speed:.3f} m/s "
+                f"(상한 {MAX_STRAIGHT_SPEED:.3f} m/s)")
 
     def _status(self, current):
-        text = f"현재 FSM={display_fsm(current)} · {self._speed_summary()}"
+        text = f"현재 FSM={display_fsm(current)} · {self.speed_summary()}"
         if self._awaiting_fsm is not None:
             text += f" · 요청한 FSM {self._awaiting_fsm} 진입 미확인"
         return text
@@ -205,8 +212,8 @@ class Controller:
             return None
         vx, vy, yaw = VELOCITY[key]
         velocity = (vx * self.linear_scale, vy * self.linear_scale, yaw * self.turn_scale)
-        if self.straight_speed is not None and vy == 0 and yaw == 0:
-            velocity = (math.copysign(self.straight_speed, vx), 0.0, 0.0)
+        if vy == 0 and yaw == 0:
+            velocity = (math.copysign(self.effective_straight_speed, vx), 0.0, 0.0)
         self._input_count += 1
         if key == self._moving_key and now - self._last_move_sent < REPEAT_INTERVAL:
             self._motion_deadline = deadline
@@ -276,7 +283,7 @@ class Controller:
             turn = self.turn_scale + change
         self.linear_scale = min(2.0, max(0.5, linear))
         self.turn_scale = min(2.0, max(0.5, turn))
-        return self._speed_summary() + " · 다음 이동 입력부터 적용합니다."
+        return self.speed_summary() + " · 다음 이동 입력부터 적용합니다."
 
     def handle(self, key, *, received_at=None, cancel_requested=None):
         """Dispatch a single operator event. Never renew a command from an expired input."""

@@ -82,16 +82,16 @@ class ControllerTest(unittest.TestCase):
         self.control.handle("g")
         self.assertEqual(self.client.calls, [])
         self.control.handle("i")
-        self.assertEqual(self.client.calls[-1], ("velocity", .15, 0, 0, PULSE_SECONDS))
+        self.assertEqual(self.client.calls[-1], ("velocity", .30, 0, 0, PULSE_SECONDS))
 
     def test_each_key_reads_actual_state_and_sends_one_finite_pulse(self):
         expected = {
-            "u": (.15, 0, .3), "i": (.15, 0, 0), "o": (.15, 0, -.3),
+            "u": (.15, 0, .3), "i": (.30, 0, 0), "o": (.15, 0, -.3),
             "j": (0, 0, .3), "l": (0, 0, -.3),
-            "m": (-.15, 0, -.3), ",": (-.15, 0, 0), ".": (-.15, 0, .3),
-            "U": (.15, .1, 0), "I": (.15, 0, 0), "O": (.15, -.1, 0),
+            "m": (-.15, 0, -.3), ",": (-.30, 0, 0), ".": (-.15, 0, .3),
+            "U": (.15, .1, 0), "I": (.30, 0, 0), "O": (.15, -.1, 0),
             "J": (0, .1, 0), "L": (0, -.1, 0),
-            "M": (-.15, .1, 0), "<": (-.15, 0, 0), ">": (-.15, -.1, 0),
+            "M": (-.15, .1, 0), "<": (-.30, 0, 0), ">": (-.15, -.1, 0),
         }
         for key, vector in expected.items():
             with self.subTest(key=key):
@@ -112,24 +112,24 @@ class ControllerTest(unittest.TestCase):
         self.control.tick()
         self.now = start + .75
         self.control.tick()
-        self.assertEqual(self.client.calls, [("read",), ("velocity", .15, 0, 0, 1), ("read",), ("read",)])
+        self.assertEqual(self.client.calls, [("read",), ("velocity", .30, 0, 0, 1), ("read",), ("read",)])
         self.now = start + 1
         self.assertIn("이동 입력 1회 · 속도 RPC 수락 1회", self.control.tick())
         self.control.tick()
         self.control.close()
-        self.assertEqual(self.client.wrapper_calls, [("Move", .15, 0, 0), ("StopMove",)])
+        self.assertEqual(self.client.wrapper_calls, [("Move", .30, 0, 0), ("StopMove",)])
 
     def test_stock_real_repeat_rate_limit_and_read_only_poll_are_independent(self):
         self.control.handle("i")
         self.advance(.05)
         self.control.handle("i")
-        self.assertEqual(self.client.wrapper_calls, [("Move", .15, 0, 0)])
+        self.assertEqual(self.client.wrapper_calls, [("Move", .30, 0, 0)])
         self.advance(.06)
         self.control.tick()
         self.advance(.01)
         self.control.handle("i")
         self.control.handle("o")
-        self.assertEqual(self.client.wrapper_calls, [("Move", .15, 0, 0), ("Move", .15, 0, 0),
+        self.assertEqual(self.client.wrapper_calls, [("Move", .30, 0, 0), ("Move", .30, 0, 0),
                                                     ("Move", .15, 0, -.3)])
         self.advance(.3)
         self.control.tick()
@@ -144,7 +144,7 @@ class ControllerTest(unittest.TestCase):
         self.advance(.1)
         self.control.handle("i", received_at=start+.1)
         self.control.tick()
-        self.assertEqual(self.client.wrapper_calls, [("Move", .15, 0, 0), ("StopMove",)])
+        self.assertEqual(self.client.wrapper_calls, [("Move", .30, 0, 0), ("StopMove",)])
         self.client.on_read = lambda: self.advance(1.1)
         self.assertIn("만료", self.control.handle(","))
         self.assertEqual(len(self.client.wrapper_calls), 2)
@@ -159,7 +159,7 @@ class ControllerTest(unittest.TestCase):
                 client.state = state
                 client.on_read = lambda: self.advance(read_time)
                 self.assertIsNotNone(control.tick())
-                self.assertEqual(client.wrapper_calls, [("Move", -.15, 0, 0), ("StopMove",)])
+                self.assertEqual(client.wrapper_calls, [("Move", -.30, 0, 0), ("StopMove",)])
                 self.assertIsNone(control.tick())
 
     def test_stock_wrapper_errors_trigger_stop_and_close_retries_only_stop(self):
@@ -169,7 +169,7 @@ class ControllerTest(unittest.TestCase):
                 control = Controller(client, clock=lambda: self.now)
                 client.Move = Mock(side_effect=[failure])
                 self.assertIn("24", control.handle("i"))
-                client.Move.assert_called_once_with(.15, 0, 0)
+                client.Move.assert_called_once_with(.30, 0, 0)
                 self.assertEqual(client.wrapper_calls, [("StopMove",)])
                 self.advance(.2)
                 self.assertIsNone(control.tick())
@@ -199,6 +199,18 @@ class ControllerTest(unittest.TestCase):
         self.assertAlmostEqual(self.client.calls[-1][1], .15 * 1.1)
         self.assertAlmostEqual(self.client.calls[-1][3], -.30 * 1.1)
 
+    def test_default_straight_speed_follows_linear_scale_up_to_the_cap(self):
+        for key, speed in (("w", .30), ("w", .30), ("z", .30), ("x", .29403)):
+            with self.subTest(key=key, speed=speed):
+                expected = f"직진·후진 ±{speed:.3f} m/s (상한 0.300 m/s)"
+                self.assertIn(expected, self.control.handle(key))
+                self.assertIn(expected, self.control.handle("f"))
+                for direction, sign in (("i", 1), (",", -1), ("I", 1), ("<", -1)):
+                    self.control.handle(direction)
+                    operation, vx, vy, yaw = self.client.wrapper_calls[-1]
+                    self.assertEqual((operation, vy, yaw), ("Move", 0, 0))
+                    self.assertAlmostEqual(vx, sign * speed)
+
     def test_tap_refreshes_until_its_original_deadline_then_zeros_once(self):
         self.use_timed_velocity()
         start = self.now
@@ -210,7 +222,7 @@ class ControllerTest(unittest.TestCase):
             self.control.tick()
             self.assertEqual(len(self.client.calls), 2)
             self.assertEqual(self.client.calls[0], ("read",))
-            self.assertEqual(self.client.calls[1][:-1], ("velocity", .15, 0, 0))
+            self.assertEqual(self.client.calls[1][:-1], ("velocity", .30, 0, 0))
             self.assertAlmostEqual(self.client.calls[1][-1], PULSE_SECONDS - offset)
             self.control.tick()
             self.assertEqual(len(self.client.calls), 2)
@@ -233,7 +245,7 @@ class ControllerTest(unittest.TestCase):
         self.now = start + PULSE_SECONDS + .01
         self.control.handle("i", received_at=start)
         self.control.tick()
-        self.assertEqual(self.client.calls[-1][:-1], ("velocity", .15, 0, 0))
+        self.assertEqual(self.client.calls[-1][:-1], ("velocity", .30, 0, 0))
         self.assertAlmostEqual(self.client.calls[-1][-1], .52)
         self.now = start + .531 + PULSE_SECONDS
         self.control.tick()
@@ -279,7 +291,7 @@ class ControllerTest(unittest.TestCase):
         self.control.tick()
         self.assertEqual(self.client.calls, [("read",), ZERO])
         self.control.handle("i")
-        self.assertEqual(self.client.calls[-1], ("velocity", .15, 0, 0, PULSE_SECONDS))
+        self.assertEqual(self.client.calls[-1], ("velocity", .30, 0, 0, PULSE_SECONDS))
 
     def test_refresh_yields_to_input_queued_before_or_during_fsm_lookup(self):
         self.use_timed_velocity()
@@ -329,7 +341,7 @@ class ControllerTest(unittest.TestCase):
         self.assertIn("SetVelocity(7105) 수락", status)
         self.assertIn("FSM=802", status)
         self.assertNotIn("→ Enter", status)
-        self.assertEqual(self.client.calls[-1][:-1], ("velocity", .15, 0, 0))
+        self.assertEqual(self.client.calls[-1][:-1], ("velocity", .30, 0, 0))
         self.assertAlmostEqual(self.client.calls[-1][-1], .7)
 
     def test_external_mode_change_stops_owned_motion(self):
@@ -399,7 +411,7 @@ class ControllerTest(unittest.TestCase):
         self.assertFalse(any(call[0] == "velocity" for call in self.client.calls))
         self.client.state = 802
         self.control.handle("i")
-        self.assertEqual(self.client.calls[-1], ("velocity", .15, 0, 0, PULSE_SECONDS))
+        self.assertEqual(self.client.calls[-1], ("velocity", .30, 0, 0, PULSE_SECONDS))
 
     def test_only_documented_run_ids_allow_direction_without_a_mode_write(self):
         for observed in (800, 801, 802):
@@ -410,7 +422,7 @@ class ControllerTest(unittest.TestCase):
                 status = control.handle("i")
                 expected = [("read",)]
                 if observed in (801, 802):
-                    expected.append(("velocity", .15, 0, 0, PULSE_SECONDS))
+                    expected.append(("velocity", .30, 0, 0, PULSE_SECONDS))
                 self.assertIn(f"FSM={observed}", status)
                 self.assertEqual(client.calls, expected)
 
@@ -427,7 +439,7 @@ class ControllerTest(unittest.TestCase):
                 self.assertEqual(client.calls, [("read",), ("fsm", target), ("read",), ("read",)])
                 client.state = target
                 self.assertIn(f"FSM={target}", control.handle("i"))
-                self.assertEqual(client.calls[-2:], [("read",), ("velocity", .15, 0, 0, PULSE_SECONDS)])
+                self.assertEqual(client.calls[-2:], [("read",), ("velocity", .30, 0, 0, PULSE_SECONDS)])
 
     def test_regular_walk_requires_actual_readback_and_fresh_direction(self):
         self.assertIn("Enter", self.control.handle("v"))
@@ -440,7 +452,7 @@ class ControllerTest(unittest.TestCase):
         self.assertIn("FSM=500 (일반 보행)", self.control.handle("f"))
         self.assertEqual(self.client.calls, [("read",), ("read",)])
         self.assertIn("FSM=500", self.control.handle("i"))
-        self.assertEqual(self.client.calls[-2:], [("read",), ("velocity", .15, 0, 0, PULSE_SECONDS)])
+        self.assertEqual(self.client.calls[-2:], [("read",), ("velocity", .30, 0, 0, PULSE_SECONDS)])
 
     def test_failed_regular_walk_request_keeps_motion_blocked_until_reselection(self):
         self.client.write_code = 12
@@ -450,7 +462,7 @@ class ControllerTest(unittest.TestCase):
         self.client.write_code = 0
         self.assertIn("FSM=802", self.request("2"))
         self.assertIn("FSM=802", self.control.handle("i"))
-        self.assertEqual(self.client.calls[-1], ("velocity", .15, 0, 0, PULSE_SECONDS))
+        self.assertEqual(self.client.calls[-1], ("velocity", .30, 0, 0, PULSE_SECONDS))
 
     def test_direction_in_already_selected_regular_mode_does_not_switch_modes(self):
         self.client.state = 500
@@ -476,9 +488,9 @@ class ControllerTest(unittest.TestCase):
         self.control.handle("i")
         self.advance(REPEAT_INTERVAL / 2)
         self.control.handle("i")
-        self.assertEqual(self.client.calls, [("read",), ("velocity", .15, 0, 0, PULSE_SECONDS)])
+        self.assertEqual(self.client.calls, [("read",), ("velocity", .30, 0, 0, PULSE_SECONDS)])
         self.control.handle(",")
-        self.assertEqual(self.client.calls[-1], ("velocity", -.15, 0, 0, PULSE_SECONDS))
+        self.assertEqual(self.client.calls[-1], ("velocity", -.30, 0, 0, PULSE_SECONDS))
 
     def test_timer_sends_only_remaining_pulse_until_input_deadline(self):
         self.use_timed_velocity()
@@ -487,7 +499,7 @@ class ControllerTest(unittest.TestCase):
         for dt in (.2, .4, .6, .8):
             self.now = start + dt
             self.control.tick()
-            self.assertEqual(self.client.calls[-1][:-1], ("velocity", .15, 0, 0))
+            self.assertEqual(self.client.calls[-1][:-1], ("velocity", .30, 0, 0))
             self.assertAlmostEqual(self.client.calls[-1][-1], 1.0 - dt)
         self.advance(.21)
         self.assertIn("이동 입력 1회 · 속도 RPC 수락 5회", self.control.tick())
@@ -503,7 +515,7 @@ class ControllerTest(unittest.TestCase):
         self.control.handle("w")
         self.advance(.925)
         self.control.tick()
-        self.assertEqual(self.client.calls[-1][:-1], ("velocity", .15, 0, 0))
+        self.assertEqual(self.client.calls[-1][:-1], ("velocity", .30, 0, 0))
         self.assertAlmostEqual(self.client.calls[-1][-1], .075)
         self.advance(.08)
         self.assertIn("이동 입력 2회", self.control.tick())
@@ -514,7 +526,7 @@ class ControllerTest(unittest.TestCase):
         self.advance(.2)
         self.control.tick(lambda: True)
         self.control.tick(Mock(side_effect=[False, True]))
-        self.assertEqual(self.client.calls, [("read",), ("velocity", .15, 0, 0, 1), ("read",)])
+        self.assertEqual(self.client.calls, [("read",), ("velocity", .30, 0, 0, 1), ("read",)])
         self.client.state = 4
         self.assertIn("FSM=4", self.control.tick())
         self.assertEqual(self.client.calls[-1], ZERO)
@@ -564,7 +576,7 @@ class ControllerTest(unittest.TestCase):
         self.client.state = 501
         self.control.handle(",")
         self.assertIn(("fsm", 501), self.client.calls)
-        self.assertEqual(self.client.calls[-1], ("velocity", -.15, 0, 0, PULSE_SECONDS))
+        self.assertEqual(self.client.calls[-1], ("velocity", -.30, 0, 0, PULSE_SECONDS))
         self.client.state = 802
         self.assertNotIn("→ Enter", self.control.handle("i"))
 
@@ -641,7 +653,7 @@ class ControllerTest(unittest.TestCase):
                     self.assertIn(f"{limit:.1f} m/s", self.control.handle(key))
                     self.assertEqual(self.client.calls, [("read",), ("speed", mode)])
         self.control.handle("i")
-        self.assertEqual(self.client.calls[-1], ("velocity", .15, 0, 0, PULSE_SECONDS))
+        self.assertEqual(self.client.calls[-1], ("velocity", .30, 0, 0, PULSE_SECONDS))
         self.client.calls.clear()
         self.client.state = 500
         self.control.handle("$")

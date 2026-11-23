@@ -55,6 +55,20 @@ g1 monitor record --nic eth0 --domain 0 --run stairs-01 --seconds 10
 g1 monitor inspect --run stairs-01
 ```
 
+## 보행 요청과 첫 다리 움직임의 시간 비교
+
+**컨테이너 내부 · 조작 터미널과 별도의 기록 터미널**
+
+```bash
+g1 monitor record --with-teleop --nic eth0 --domain 0 --run "first-step-$(date +%Y%m%d-%H%M%S)" --seconds 30
+```
+
+이 명령은 구독만 한다. 구독 시작 안내가 뜨면 정지 자세부터 기록할 수 있다. 지정한 시간이 지나면 `/workspace/runs/<실험 이름>/state/`에 두 파일을 저장한다. `samples.jsonl`의 `imu.rpy[1]`은 IMU 피치(rad), `joints[0:12]`의 `q_rad`는 양다리의 실측 관절각이다. 두 파일의 `host_rx_monotonic_ns`는 같은 PC2 단조 시계로 잰 수신 시각이다. 명령 전후를 비교할 때는 두 파일이 함께 기록된 구간을 사용한다.
+
+`teleop.jsonl`의 `topic`은 출처다. `rt/api/sport/request`와 `rt/api/loco/request`에서는 7105 요청의 `request_id`, `api_id`, `velocity`(전후 m/s, 좌우 m/s, 회전 rad/s), `duration`(초)을 입력값 그대로 기록한다. 속도 세 값이 모두 0이면 정지 요청이다. `rt/sportmodestate`에서는 처음 수신한 `fsm_id`·`fsm_mode`와 이후 값이 달라진 표본을 기록한다. 요청 시각, 정적·동적 상태 전환, IMU 기울기, 관절각 변화를 대조할 수 있다. 실제 키 누름·서비스 응답·발 접촉 시각은 이 파일에 포함되지 않는다. [공식 속도 요청](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/unitree_sdk2py/g1/loco/g1_loco_client.py#L70-L78) · [공식 HG 보행 상태 형식](https://github.com/unitreerobotics/unitree_sdk2/blob/aaf69cb56c9d5ed63d8b284008ec3a8ab999bec1/include/unitree/idl/hg/SportModeState_.hpp)
+
+`manifest.json`의 `teleop_trace`에는 구독 준비·종료 시각, 토픽별 수신·기록·큐 누락·해석 불가 건수, 최초·마지막 수신 시각, 최대 수신 간격, 관측 건수가 0인 토픽이 들어간다. 서비스 요청의 수신 건수는 7105만 센다. 한 서비스만 사용한 시험에서는 나머지 서비스에 0건이 표시될 수 있다. DDS에서 관측되지 않은 요청 수는 알 수 없다.
+
 ## 공식 SDK 데이터와 표시 항목
 
 | 항목 | 근거 |

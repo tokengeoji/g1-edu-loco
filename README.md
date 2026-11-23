@@ -117,9 +117,9 @@ g1 teleop --live --interface eth0 --domain 0
 | `v` → `Enter` / `2` → `Enter` | 일반 보행(FSM 500) 요청 / 메뉴에 표시된 Run(801 또는 802) 요청 |
 | `f` / `?` | 현재 FSM 조회 / 전체 키 안내 |
 
-기본 경로는 방향 키를 받을 때 Unitree SDK의 `Move(vx, vy, yaw)`를 호출한다. `i` 한 번은 전진 0.15 m/s를 한 번 요청한다. 각 요청의 SDK 유효시간은 전송 시점부터 1초다. 키를 길게 누르면 같은 키의 터미널 반복 입력을 최대 10 Hz로 전송한다. 마지막 이동 입력에서 1초가 지나거나 `k`를 누르면 `StopMove()`를 호출한다. 이전 타이머 재전송 방식은 `--timed-velocity`로 선택한다. [공식 Move·StopMove 구현](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/unitree_sdk2py/g1/loco/g1_loco_client.py#L140-L153)
+기본 배율에서 `i` 한 번은 Unitree 공식 예제와 같은 `Move(0.3, 0, 0)`, `,`는 `Move(-0.3, 0, 0)`을 요청한다. 추가 속도 옵션은 필요 없다. 순수 전후진은 배율을 낮춰 줄일 수 있고 상한은 0.30 m/s다. `--straight-speed`를 명시하면 해당 값으로 고정된다. 각 이동 요청은 전송 시점부터 1초간 유효하며 같은 키의 새 반복 입력은 최대 10 Hz로 전송한다. 마지막 입력에서 1초가 지나거나 `k`를 누르면 `StopMove()`를 호출한다. 이전 타이머 재전송 방식은 `--timed-velocity`로 선택한다. [공식 전진 예제](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/example/g1/high_level/g1_loco_client_example.py#L92-L97)
 
-11월 23일에 이전 방식으로 시험했을 때에는 ±0.15 m/s 전후진 요청에 서비스가 응답해도 발걸음이 관측되지 않았다. `--straight-speed 0.30`을 지정하면 `i`가 공식 예제와 같은 `Move(0.3, 0, 0)`을 요청한다. FSM 802의 실제 전후진은 현장 발걸음과 `g1 teleop --feedback --interface eth0 --domain 0`의 시작 전방 변위로 확인한다. 일반 보행을 선택한 경우에는 FSM 500 확인 뒤 다음 이동 키가 전송된다. ROS 2 키 배치에서 `w`는 선속도 증가, `m`은 후진 선회, `x`는 선속도 감소다. [전체 키 배치와 측정 기록](src/g1_teleop/README.md#no-motion)
+11월 23일에 기록한 두 시험에서는 FSM 802의 순수 전후진 ±0.15 m/s에서 발걸음이 관측되지 않았다. `g1 teleop --feedback --interface eth0 --domain 0`의 시작 전방 변위와 현장 발걸음으로 실제 이동을 확인한다. 일반 보행을 선택한 경우에는 FSM 500 확인 뒤 다음 이동 키가 전송된다. ROS 2 키 배치에서 `w`는 선속도 증가, `m`은 후진 선회, `x`는 선속도 감소다. [키 배치와 이후 전진 관찰](src/g1_teleop/README.md#no-motion)
 
 <a id="camera"></a>
 
