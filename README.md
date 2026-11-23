@@ -9,7 +9,7 @@ G1-EDU PC2에서 CPU 이미지 **`g1-jsj:base`**를 한 번 빌드하면 Ubuntu�
 | --- | --- |
 | 모터 명령 전 키 배치·정지 확인, FSM 802에서 전진·후진이 안 됐던 이유와 비교 시험 | [보행 전 점검](docs/teleop-preflight.md) · [전후진 명령과 실제 변위 기록](src/g1_teleop/README.md#no-motion) |
 | 머리 D435i 켜기, Windows에서 컬러·깊이를 TTY 또는 RViz2로 확인 | [카메라 수신 검사](docs/camera-check.md) · [Windows Docker 설정](docs/windows-development-pc.md) |
-| 계단 촬영·보정·치수 계산, 폭이 `null`인 이유, G1의 디딤 가능성 판정 설계 | [측정 명령·출력값·착지 판정 계획](docs/stair-analysis.md) |
+| 계단 촬영·보정·치수 계산, 발바닥을 놓을 수 있는 위치와 도달 범위 | [측정 명령과 발 디딤 후보 판정](docs/stair-analysis.md) |
 
 [Windows Docker에서 G1 영상·상태 보기](docs/windows-development-pc.md) · [Linux 개발 PC와 PC2의 ROS 2·Cyclone DDS 설정](docs/development-pc.md) · [이미지 빌드](#pc2) · [컨테이너 생성](#create) · [온도·텔레옵](#monitoring) · [카메라](#camera) · [계단 계산](#geometry) · [재개·기록 보관](#resume)
 
@@ -89,7 +89,7 @@ g1 interfaces
 g1 health eth0
 ```
 
-원본 C++ 모니터는 DDS 도메인 0을 사용한다. 모터·배터리의 최신 샘플과 온도를 확인하고 측정 중에는 이 터미널을 열어 둔다. [관절·IMU 대시보드와 상태 기록](src/g1stairs/monitoring/README.md)
+C++ 모니터는 DDS 도메인 0에서 모터·배터리 상태를 구독한다. 첫 출력 이후 10초마다 최신 온도를 읽고 경보와 화면을 갱신한다. [관절·IMU 대시보드와 상태 기록](src/g1stairs/monitoring/README.md)
 
 **컨테이너 내부 · 터미널 2 · 실제 상태로 키보드 미리보기**
 
@@ -110,8 +110,8 @@ g1 teleop --live --interface eth0 --domain 0
 | 키 | 동작 |
 | --- | --- |
 | `i` / `,` 또는 `↑` / `↓` | 전진 / 후진 |
-| `j` / `l` 또는 `←` / `→` | 제자리 좌회전 / 우회전 |
-| `Shift+J` / `Shift+L` | 왼쪽 / 오른쪽 옆걸음 |
+| 소문자 `j` / `l` 또는 `←` / `→` | 제자리 좌회전 / 우회전 요청. 옆방향 속도 0 |
+| 대문자 `J` / `L` (Shift+j / Shift+l) | 왼쪽 / 오른쪽 옆걸음 요청. 회전속도 0 |
 | `k` 또는 스페이스 / `Ctrl+C` | 속도 0 요청 후 조작 계속 / 속도 0 요청의 결과를 표시하고 종료 |
 | `q` / `z` | 다음 이동의 선속도·회전속도 10% 증가 / 감소 |
 | `v` → `Enter` / `2` → `Enter` | 일반 보행(FSM 500) 요청 / 메뉴에 표시된 Run(801 또는 802) 요청 |
@@ -247,7 +247,7 @@ g1 stairs measure --run "$RUN_ID" --calibration "/workspace/runs/$RUN_ID/measure
 head -n 1 "/workspace/runs/$RUN_ID/geometry/stairs.jsonl"
 ```
 
-기록 때 `--calibration`을 제공했다면 측정 단계에서 보정 인자를 생략할 수 있다. 기본은 첫 프레임이며 전체는 `--all-frames`다. `riser_height_m`은 인접 면의 단차, `tread_depth_m`은 디딤면의 앞뒤 깊이, `width_m`은 좌우 폭이다. 단위는 미터다. 한쪽 경계만 보이면 해당 축의 치수는 `null`이 된다. 수평면 후보에는 책상 같은 물체도 포함될 수 있다. 발바닥 전체를 지지할 영역, 현재 발에서의 도달 범위, 지지 전환 중 균형은 후속 개발 항목이다. [실측 보정·출력 판독·발 디딤 판정 설계](docs/stair-analysis.md)
+기록 때 `--calibration`을 제공했다면 측정 단계에서 보정 인자를 생략할 수 있다. 기본은 첫 프레임이며 전체는 `--all-frames`다. `riser_height_m`은 인접 면의 단차, `tread_depth_m`은 디딤면의 앞뒤 깊이, `width_m`은 좌우 폭이다. 한쪽 경계만 보이면 해당 축의 치수는 `null`이다. `stair_flights`에서 연속으로 연결된 단과 단 경계 사이의 수평 간격을 확인한다. `g1 stairs assess`는 같은 프레임에서 발바닥 전체에 필요한 면적을 검사한다. 지지발 자세와 실측 도달 한계를 제공하면 후보까지의 높이·거리·방향도 검사한다. [실측 보정·치수 판독·발 디딤 후보 검사](docs/stair-analysis.md)
 
 현재 `g1 teleop`의 802 전후진 키는 기체의 고수준 속도 API를 호출한다. 위에서 계산한 계단 치수는 기록 파일에 남으며, 802나 모터로 전달되는 경로는 없다. 향후 계단 보행 정책을 도입한다면 운영자가 정지 상태에서 별도의 보행 제어기를 선택하고, 키보드는 선택한 제어기에 진행 의도를 전달하는 구성을 검토한다. 이 브랜치에 실기체 계단 정책을 켜는 키는 아직 없다.
 

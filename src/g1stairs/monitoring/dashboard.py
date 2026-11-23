@@ -1,6 +1,7 @@
 """Dependency-free browser UI for live read-only telemetry and saved sessions."""
 
 import json
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -8,7 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from g1stairs.session import read_json
 
-from .telemetry import serialize
+from .telemetry import Temperatures, serialize
 
 
 class Recording:
@@ -46,18 +47,23 @@ class Live:
     def __init__(self, receiver, stale_after):
         self.receiver = receiver
         self.stale_after = stale_after
+        self.temperatures = Temperatures()
+        self.lock = threading.Lock()
 
     def sample(self, index):
-        current, _ = self.receiver.snapshot()
-        if current is None:
-            return {"source": "unitree", "status": "waiting", "sample": None}
-        received_ns, message = current
+        # Concurrent browser requests share one ordered temperature sample series.
+        with self.lock:
+            current, _ = self.receiver.snapshot()
+            if current is None:
+                return {"source": "unitree", "status": "waiting", "sample": None}
+            received_ns, message = current
+            sample = serialize(message, received_ns, self.temperatures)
         age = (time.monotonic_ns() - received_ns) / 1_000_000_000
         return {
             "source": "unitree",
             "status": "stale" if age > self.stale_after else "live",
             "age_s": age,
-            "sample": serialize(message, received_ns),
+            "sample": sample,
         }
 
 

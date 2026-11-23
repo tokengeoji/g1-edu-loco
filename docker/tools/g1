@@ -59,6 +59,7 @@ jsj-g1-tools 컨테이너 안에서 실행
   g1 camera COMMAND [options]         D435i 시작(start), 외부 TTY·RViz 연결(remote), 깊이 기록·재생
   g1 stairs calibrate [options]       기록한 깊이와 실측 기준점으로 고정 자세 보정
   g1 stairs measure [options]         /workspace/runs의 깊이 기록으로 계단 치수 계산
+  g1 stairs assess [options]          측정된 면에서 발바닥 전체 지지와 선택한 도달 범위 검사
 HELP
     ;;
   *) echo "알 수 없는 명령 '$command'. 컨테이너 안에서 g1 --help로 명령을 확인하세요." >&2; exit 2 ;;

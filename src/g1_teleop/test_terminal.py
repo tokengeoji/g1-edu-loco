@@ -213,6 +213,8 @@ class TerminalLoopTests(unittest.TestCase):
                         "7/9 의자에 앉기 (FSM 3)", "8 허리 3자유도 보행 (FSM 501)", "v 일반 보행 (FSM 500)"):
             self.assertIn(binding, startup)
         self.assertIn("--waist-3dof", startup)
+        self.assertIn("← / → = 소문자 j / l · 제자리 회전 요청 (vx=vy=0)", startup)
+        self.assertIn("대문자 J / L (Shift+j / Shift+l) · 왼쪽 / 오른쪽 옆걸음 요청 (vx=yaw=0)", startup)
         self.assertIn("Ctrl+C 정지 요청 후 종료", startup)
         os.write(self.master, b"\x04")
         self.assert_restored()

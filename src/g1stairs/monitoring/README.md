@@ -19,7 +19,7 @@ g1 interfaces
 g1 health eth0
 ```
 
-C++ 프로그램은 도메인 0에서 `ChannelSubscriber<LowState_>`와 `ChannelSubscriber<BmsState_>`를 생성해 모터 온도와 BMS 상태를 수신한다. 다른 도구를 함께 쓸 때는 이 모니터를 켜 두고, 실험이 끝나면 `Ctrl+C`로 종료한다. [원본 모니터 설명](../../g1_health_monitor/)
+C++ 프로그램은 도메인 0에서 `ChannelSubscriber<LowState_>`와 `ChannelSubscriber<BmsState_>`로 모터와 BMS 상태를 수신한다. 첫 출력 후 10초마다 최신 샘플로 온도와 경보 단계를 갱신한다. 다른 도구를 함께 쓸 때는 이 모니터를 켜 두고, 실험이 끝나면 `Ctrl+C`로 종료한다. [원본 모니터 설명](../../g1_health_monitor/)
 
 ## 웹 대시보드와 관절 기록
 
@@ -60,7 +60,8 @@ g1 monitor inspect --run stairs-01
 | 항목 | 근거 |
 | --- | --- |
 | 발행 메시지 | 공식 Python SDK의 `ChannelFactoryInitialize`, `ChannelSubscriber`와 `unitree_hg.msg.dds_.LowState_`를 사용한다. |
-| 관절·IMU | `q`, `dq`, `tau_est`, `imu_state`와 모터 온도 배열을 읽는다. SDK의 온도 배열 0은 외함, 1은 권선이다. |
+| 관절·IMU | 각 상태 샘플에서 `q`, `dq`, `tau_est`와 IMU 자세·각속도·가속도를 읽는다. |
+| 온도 | 연속 기록과 실시간 대시보드는 첫 샘플에서 모터 외함·권선과 IMU 온도를 읽고, 이후 10초 이상 지난 첫 샘플에서 갱신한다. 그 사이 샘플은 마지막 온도와 해당 샘플의 수신 시각(`temperature_host_rx_monotonic_ns`)을 함께 표시·기록한다. |
 | 관절 이름 | 공식 G1 예제의 인덱스 0–28과 `mode_pr`의 PR/AB 표현을 따른다. EDU 23자유도·허리 잠금 모델의 인덱스 13/14 등은 실제 관절 구성과 대조한다. |
 | 수신 시간·상태 | 수신 시각, 샘플 간격, `live`·`stale`은 모니터가 PC2의 단조 시계로 계산한다. |
 

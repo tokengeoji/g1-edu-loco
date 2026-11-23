@@ -9,7 +9,7 @@ import numpy as np
 
 from g1stairs.session import create_part, dump_line, read_json, read_jsonl, recorded_frame_path, run_path
 
-from . import calibration_points
+from . import calibration_points, feasibility
 from .projection import Calibration, camera_rays, deproject
 from .surfaces import MeasurementOptions, measure_surfaces
 
@@ -56,6 +56,7 @@ def _measure(args):
         "calibration_source_frame_check": "matched" if "source_frame" in calibration_json else "unspecified",
         "deprojection": "librealsense.rs2_deproject_pixel_to_point",
         "surface_estimation": "project_horizontal_surfaces",
+        "flight_estimation": "monotonic_treads_with_witnessed_shared_boundaries",
         "calibration": calibration_json,
         "calibration_scope": "fixed_pose_per_run",
         "units": {"distance": "m", "host_rx_monotonic_ns": "ns"},
@@ -90,6 +91,7 @@ def _measure(args):
         "frame_count": count,
         "first_frame_number": first["frame_number"],
         "first_frame_status": first["status"],
+        "stair_flights": first["stair_flights"],
         "treads": [
             {key: tread[key] for key in ("z_m", "riser_height_m", "tread_depth_m", "width_m", "dimension_status")}
             for tread in first["treads"]
@@ -114,6 +116,9 @@ def main(argv=None):
     measure.add_argument("--grid-m", type=float, default=0.025)
     measure.add_argument("--height-tolerance-m", type=float, default=0.018)
     measure.add_argument("--min-samples", type=int, default=45)
+    assess = subparsers.add_parser("assess", help="check foot support and optional reach on a saved measurement")
+    feasibility.configure_parser(assess)
+    assess.set_defaults(handler=feasibility.run)
     args = parser.parse_args(argv)
     try:
         print(json.dumps(args.handler(args), ensure_ascii=False, allow_nan=False, indent=2))

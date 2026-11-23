@@ -39,6 +39,7 @@
       <div><dt>관절 수</dt><dd id="joint-count">—</dd></div>
       <div><dt>IMU Roll / Pitch / Yaw</dt><dd id="rpy">—</dd></div>
       <div><dt>IMU 온도</dt><dd id="imu-temp">—</dd></div>
+      <div><dt>온도 측정 후 경과</dt><dd id="temp-age">—</dd></div>
       <div><dt>DDS tick</dt><dd id="tick">—</dd></div>
       <div><dt>모터 각도 모드</dt><dd id="pr">—</dd></div>
     </dl>
@@ -82,6 +83,8 @@ function paint(data) {
   byId('joint-count').textContent = s.joints.length;
   byId('rpy').textContent = s.imu.rpy.map(n => value(n, 3)).join(' / ');
   byId('imu-temp').textContent = s.imu.temperature_c == null ? '—' : s.imu.temperature_c + ' °C';
+  const temperatureAge = (s.host_rx_monotonic_ns - s.temperature_host_rx_monotonic_ns) / 1e9 + (data.age_s || 0);
+  byId('temp-age').textContent = Number.isFinite(temperatureAge) ? temperatureAge.toFixed(1) + '초' : '—';
   byId('tick').textContent = s.tick == null ? '—' : s.tick;
   byId('pr').textContent = s.mode_pr === 0 ? 'PR' : s.mode_pr === 1 ? 'AB' : '—';
   const rows = document.createDocumentFragment();

@@ -127,7 +127,7 @@ RUN printf '%s\n' 'pyrealsense2==2.54.1.5217 --hash=sha256:933b6948bb995d8b98b06
 
 WORKDIR /opt/g1-tools
 COPY src/g1_health_monitor/ ./g1_health_monitor/
-# Build the unchanged monitor against the same Unitree C++ SDK it uses at run time.
+# Build the monitor against the same Unitree C++ SDK it uses at run time.
 RUN cmake -S g1_health_monitor -B /tmp/g1-health-build \
         -Dunitree_sdk2_DIR=/opt/unitree_robotics/lib/cmake/unitree_sdk2 && \
     cmake --build /tmp/g1-health-build --parallel 2 && \

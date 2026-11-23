@@ -10,7 +10,7 @@ from pathlib import Path
 from g1stairs.session import create_part, dump_line, read_json, read_jsonl, run_path
 
 from .dashboard import Live, Recording, serve
-from .telemetry import TOPIC, Receiver, serialize, subscribe
+from .telemetry import TEMPERATURE_PERIOD_S, TOPIC, Receiver, Temperatures, serialize, subscribe
 
 
 ROBOT_PROFILE = "g1-29"
@@ -59,7 +59,9 @@ def record(args):
         "dds_topic": TOPIC,
         "dds_domain": args.domain,
         "duration_requested_s": args.seconds,
+        "temperature_period_s": TEMPERATURE_PERIOD_S,
     }
+    temperatures = Temperatures()
     receiver = Receiver()
     with create_part(args.runs_dir, args.run, "state", metadata) as path:
         with subscribe(args.nic, args.domain, receiver):
@@ -72,7 +74,7 @@ def record(args):
             with (path / "samples.jsonl").open("w", encoding="utf-8") as stream:
                 while sample is not None and sample[0] < end_ns:
                     received_ns, message = sample
-                    dump_line(stream, serialize(message, received_ns))
+                    dump_line(stream, serialize(message, received_ns, temperatures))
                     count += 1
                     max_gap_ns = max(max_gap_ns, received_ns - last_ns)
                     last_ns = received_ns

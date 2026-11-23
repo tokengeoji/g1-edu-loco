@@ -7,6 +7,7 @@ import time
 from contextlib import contextmanager
 
 TOPIC = "rt/lowstate"
+TEMPERATURE_PERIOD_S = 10
 JOINT_NAMES = (
     "left_hip_pitch", "left_hip_roll", "left_hip_yaw", "left_knee",
     "left_ankle_pitch", "left_ankle_roll",
@@ -38,27 +39,52 @@ def joint_name(index, mode_pr):
     return JOINT_NAMES[index]
 
 
-def serialize(message, received_ns):
+class Temperatures:
+    """Read motor and IMU temperatures once per interval on the sample's clock."""
+
+    def __init__(self):
+        self.received_ns = None
+        self.motors = ()
+        self.imu = None
+
+    def update(self, message, received_ns):
+        if self.received_ns is not None and received_ns - self.received_ns < TEMPERATURE_PERIOD_S * 1_000_000_000:
+            return
+        motors = []
+        for motor in message.motor_state[:len(JOINT_NAMES)]:
+            values = motor.temperature
+            motors.append((number(values[0]) if len(values) > 0 else None,
+                           number(values[1]) if len(values) > 1 else None))
+        self.imu = number(message.imu_state.temperature)
+        self.motors = motors
+        self.received_ns = received_ns
+
+
+def serialize(message, received_ns, temperatures=None):
     mode_pr = message.mode_pr
     imu = message.imu_state
     if len(message.motor_state) < len(JOINT_NAMES):
         raise ValueError("G1 EDU monitoring requires all 29 body motor slots in LowState")
+    if temperatures is None:
+        temperatures = Temperatures()
+    temperatures.update(message, received_ns)
     joints = []
     for index in range(len(JOINT_NAMES)):
         motor = message.motor_state[index]
-        temperatures = list(motor.temperature)
+        casing, winding = temperatures.motors[index]
         joints.append({
             "index": index,
             "name": joint_name(index, mode_pr),
             "q_rad": number(motor.q),
             "dq_rad_s": number(motor.dq),
             "tau_est_nm": number(motor.tau_est),
-            "temperature_casing_c": number(temperatures[0]) if temperatures else None,
-            "temperature_winding_c": number(temperatures[1]) if len(temperatures) > 1 else None,
+            "temperature_casing_c": casing,
+            "temperature_winding_c": winding,
             "motorstate": getattr(motor, "motorstate", None),
         })
     return {
         "host_rx_monotonic_ns": received_ns,
+        "temperature_host_rx_monotonic_ns": temperatures.received_ns,
         "tick": message.tick,
         "mode_machine": message.mode_machine,
         "mode_pr": mode_pr,
@@ -67,7 +93,7 @@ def serialize(message, received_ns):
             "gyroscope": [number(v) for v in imu.gyroscope],
             "accelerometer": [number(v) for v in imu.accelerometer],
             "rpy": [number(v) for v in imu.rpy],
-            "temperature_c": number(imu.temperature),
+            "temperature_c": temperatures.imu,
         },
         "joints": joints,
     }

@@ -68,7 +68,7 @@ python3 -c 'from pathlib import Path; import g1_teleop, g1stairs; print(Path(g1_
 
 ## 3. 온도와 텔레옵
 
-**G1 컨테이너 내부 · 터미널 1 · 온도와 배터리를 계속 표시**
+**G1 컨테이너 내부 · 터미널 1 · 첫 출력 후 10초마다 온도와 배터리 표시**
 
 ```bash
 g1 interfaces
@@ -177,4 +177,4 @@ G1_CAMERA_IFACE=eth0 G1_CAMERA_DOMAIN=0 g1 camera record-ros --run "$RUN_ID" --s
   --depth-topic /g1/head/depth/image_rect_raw --info-topic /g1/head/depth/camera_info --depth-scale-m 0.001
 ```
 
-이후 같은 셸에서 실측 카메라 변환을 적용해 인접 디딤면 간 높이, 디딤면 깊이와 폭을 미터 단위로 계산한다. 양쪽 경계가 보이지 않으면 폭은 `null`이다. 현 구현은 기체의 발 크기·도달 범위를 반영한 착지 판정을 제공하지 않는다. [측정 명령·결과 판독·착지 가능성 설계](stair-analysis.md)
+이후 같은 셸에서 `g1 stairs measure`로 인접 면 사이의 단차, 디딤면 깊이와 폭을 미터 단위로 계산한다. 양쪽 경계가 보이지 않으면 폭은 `null`이다. `g1 stairs assess`에 실측한 발 크기와 여유를 넣어 발을 놓을 후보를 찾는다. 지지발 자세와 검증된 도달 한계가 있으면 그 범위까지 함께 검사한다. [측정 명령·결과 판독·발 디딤 후보 검사](stair-analysis.md)

@@ -56,6 +56,7 @@ struct Limits {
 const Limits kBatteryLimits = {45, 50, 10, 5};
 
 using Clock = std::chrono::steady_clock;
+constexpr auto kTemperaturePeriod = std::chrono::seconds(10);
 
 struct Shared {
   std::mutex mtx;
@@ -129,8 +130,10 @@ int main(int argc, char** argv) {
   ChannelSubscriber<BmsState_> bms_sub(kBmsStateTopic);
   bms_sub.InitChannel(BmsStateHandler, 1);
 
+  auto next_sample = Clock::now() + std::chrono::seconds(1);  // Allow discovery before the first report.
   while (true) {
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::this_thread::sleep_until(next_sample);
+    next_sample = Clock::now() + kTemperaturePeriod;
 
     LowState_ low;
     BmsState_ bms;

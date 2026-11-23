@@ -48,6 +48,58 @@ class StairMeasurementTest(unittest.TestCase):
         self.assertIsNone(first["width_m"])
         self.assertLess(first["observed_width_span_m"], 0.55)
 
+    def test_flight_uses_witnessed_transitions_across_unrelated_platform(self):
+        points = deproject(self.depth, self.rays, self.scale, self.calibration)
+        # A disconnected shelf lies between the first and second treads in
+        # forward order. Its left/right extent is outside the staircase.
+        extra = np.full((points.shape[0], 14, 3), np.nan)
+        r, c = np.indices((12, 12))
+        extra[1:13, 1:13, 0] = 0.81 + r * 0.01
+        extra[1:13, 1:13, 1] = 0.75 + c * 0.01
+        extra[1:13, 1:13, 2] = 0.22
+        scene = np.concatenate((points, extra), axis=1)
+        measured = measure_surfaces(scene, self.calibration.translation_m, 0.0, MeasurementOptions())
+        self.assertEqual(len(measured["treads"]), 5)
+        self.assertIsNone(measured["treads"][1]["riser_height_m"])
+        self.assertAlmostEqual(measured["treads"][2]["riser_height_m"], 0.15, delta=0.002)
+        flight, = measured["stair_flights"]
+        self.assertEqual(flight["direction"], "ascending")
+        self.assertEqual(flight["surface_ids"], [0, 2, 3, 4])
+        self.assertEqual(flight["riser_sample_count"], 3)
+        self.assertEqual(flight["going_sample_count"], 2)
+        self.assertAlmostEqual(flight["median_riser_height_m"], 0.15, delta=0.002)
+        self.assertAlmostEqual(flight["median_going_m"], 0.35, delta=0.01)
+        self.assertIsNone(measured["treads"][2]["tread_depth_m"])
+
+    def test_unseen_middle_tread_is_not_bridged(self):
+        points = deproject(self.depth, self.rays, self.scale, self.calibration)
+        points[np.abs(points[:, :, 2] - 0.30) < 0.02] = np.nan
+        measured = measure_surfaces(points, self.calibration.translation_m, 0.0, MeasurementOptions())
+        self.assertGreaterEqual(len(measured["treads"]), 3)
+        self.assertEqual(measured["stair_flights"], [])
+
+    def test_split_predecessor_keeps_ambiguous_riser_unmeasured(self):
+        points = deproject(self.depth, self.rays, self.scale, self.calibration)
+        split_first = (np.abs(points[:, :, 2] - 0.15) < 0.02) & (np.abs(points[:, :, 1]) < 0.09)
+        points[split_first] = np.nan
+        measured = measure_surfaces(points, self.calibration.translation_m, 0.0, MeasurementOptions())
+        second = min(measured["treads"], key=lambda tread: abs(tread["z_m"] - 0.30))
+        self.assertEqual(second["riser_status"], "ambiguous_predecessor")
+        self.assertIsNone(second["riser_height_m"])
+        flight, = measured["stair_flights"]
+        self.assertEqual(flight["surface_ids"][0], second["surface_id"])
+        self.assertEqual(flight["riser_sample_count"], 2)
+
+    def test_reverse_survey_direction_reports_descending_flight(self):
+        points = deproject(self.depth, self.rays, self.scale, self.calibration)
+        half_turn = np.array([-1, -1, 1])
+        measured = measure_surfaces(points * half_turn, self.calibration.translation_m * half_turn,
+                                    0.0, MeasurementOptions())
+        flight, = measured["stair_flights"]
+        self.assertEqual(flight["direction"], "descending")
+        self.assertTrue(all(edge["signed_rise_m"] < 0 for edge in flight["transitions"]))
+        self.assertAlmostEqual(flight["median_going_m"], 0.35, delta=0.01)
+
     def test_zero_depth_does_not_create_ground(self):
         result = self.measure(np.zeros_like(self.depth))
         self.assertFalse(result["ground_observed"])

@@ -189,18 +189,78 @@ def _surface(points, sample_ids, cells, camera_origin, options):
     }
 
 
-def _adjacent(previous, current, options):
+def _shared_boundary(previous, current, options):
+    """Locate a witnessed edge between different levels with local lateral support."""
+    if abs(current["z_m"] - previous["z_m"]) <= options.height_tolerance_m:
+        return None
     end = previous["edges"]["back"]["position_m"]
     start = current["edges"]["front"]["position_m"]
     if end is None and start is None:
-        return False
+        return None
     a, b = previous["observed_bounds_m"], current["observed_bounds_m"]
-    end = a["x_max"] if end is None else end
-    start = b["x_min"] if start is None else start
-    if abs(end - start) > options.grid_m:
-        return False
-    overlap = min(a["y_max"], b["y_max"]) - max(a["y_min"], b["y_min"])
-    return overlap > options.grid_m * 2
+    if b["x_min"] <= a["x_min"] or b["x_max"] <= a["x_max"]:
+        return None
+    previous_limit = a["x_max"] if end is None else end
+    current_limit = b["x_min"] if start is None else start
+    if abs(previous_limit - current_limit) > options.grid_m:
+        return None
+    if min(a["y_max"], b["y_max"]) - max(a["y_min"], b["y_min"]) <= options.grid_m * 2:
+        return None
+    positions = [v for v in (end, start) if v is not None]
+    x_edge = sum(positions) / len(positions)
+    edge_cell = int(np.floor(x_edge / options.grid_m))
+    # A bounding box might span a hole or a missing corner. Require the two
+    # measured patches to reach the same three neighboring lateral grid cells.
+    strips = [{y for x, y in patch["observed_cells"] if abs(x - edge_cell) <= 1}
+              for patch in (previous, current)]
+    overlap = strips[0] & strips[1]
+    if not any(y + 1 in overlap and y + 2 in overlap for y in overlap):
+        return None
+    source = "previous_back" if start is None else "next_front"
+    if len(positions) == 2:
+        source = "both"
+    return {"from_surface_id": previous["surface_id"], "to_surface_id": current["surface_id"],
+            "boundary_x_m": x_edge, "boundary_source": source,
+            "signed_rise_m": current["z_m"] - previous["z_m"]}
+
+
+def _stair_flights(incoming, outgoing):
+    """Group unambiguous neighboring tread planes with monotonic heights.
+
+    Pérez-Yus et al. (CVIU 154, 2017, sections 4.1–4.2) connect candidate
+    planes and measure horizontal spacing between consecutive step edges.
+    Here each link requires a witnessed boundary in the surveyed stair frame.
+    """
+    links = {i: edges[0] for i, edges in enumerate(outgoing)
+             if len(edges) == 1 and len(incoming[edges[0]["to_surface_id"]]) == 1}
+    entering = {edge["to_surface_id"]: edge for edge in links.values()}
+    flights = []
+    for i, first in links.items():
+        sign = np.sign(first["signed_rise_m"])
+        if i in entering and np.sign(entering[i]["signed_rise_m"]) == sign:
+            continue
+        chain = [first]
+        edge = links.get(first["to_surface_id"])
+        while edge is not None and np.sign(edge["signed_rise_m"]) == sign:
+            chain.append(edge)
+            edge = links.get(edge["to_surface_id"])
+        if len(chain) < 2:
+            continue
+        rises = np.abs([item["signed_rise_m"] for item in chain])
+        goings = np.diff([item["boundary_x_m"] for item in chain])
+        if np.any(goings <= 0):
+            continue
+        rise, going = float(np.median(rises)), float(np.median(goings))
+        flights.append({
+            "surface_ids": [i] + [item["to_surface_id"] for item in chain],
+            "direction": "ascending" if sign > 0 else "descending",
+            "transitions": chain,
+            "riser_sample_count": len(rises), "median_riser_height_m": rise,
+            "riser_height_mad_m": float(np.median(np.abs(rises - rise))),
+            "going_sample_count": len(goings), "median_going_m": going,
+            "going_mad_m": float(np.median(np.abs(goings - going))),
+        })
+    return flights
 
 
 def _near_visible_ground(ground, surface, options):
@@ -238,13 +298,24 @@ def measure_surfaces(points, camera_origin, ground_z_m, options):
     treads.sort(key=lambda item: (item["observed_bounds_m"]["x_min"], item["z_m"]))
     for index, surface in enumerate(treads):
         surface["surface_id"] = index
+    incoming = [[] for _ in treads]
+    outgoing = [[] for _ in treads]
+    for i, previous in enumerate(treads):
+        for j in range(i + 1, len(treads)):
+            edge = _shared_boundary(previous, treads[j], options)
+            if edge is not None:
+                incoming[j].append(edge)
+                outgoing[i].append(edge)
+    for index, surface in enumerate(treads):
         height_above_ground = None if ground_z_m is None else surface["z_m"] - ground_z_m
         vertical_change = None
         riser_status = "boundary_unconfirmed"
-        if index and _adjacent(treads[index - 1], surface, options):
-            vertical_change = surface["z_m"] - treads[index - 1]["z_m"]
+        if len(incoming[index]) == 1:
+            vertical_change = incoming[index][0]["signed_rise_m"]
             riser_status = "estimated_common_boundary"
-        elif not index and _near_visible_ground(ground, surface, options):
+        elif incoming[index]:
+            riser_status = "ambiguous_predecessor"
+        elif _near_visible_ground(ground, surface, options):
             vertical_change = height_above_ground
             riser_status = "estimated_from_ground"
         surface["height_above_reference_ground_m"] = height_above_ground
@@ -260,4 +331,5 @@ def measure_surfaces(points, camera_origin, ground_z_m, options):
         "grid_m": options.grid_m,
         "observed_ground_patches": ground,
         "treads": treads,
+        "stair_flights": _stair_flights(incoming, outgoing),
     }
