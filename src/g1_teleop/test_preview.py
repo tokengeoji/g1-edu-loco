@@ -33,9 +33,10 @@ class PreviewTests(unittest.TestCase):
         self.stamp_offset_ns = 0
         self.channel_events = []
         self.stack.enter_context(patch.object(preview, "subscribe", self.subscribe))
-        self.robot = Mock(spec_set=["GetFsmId", "SetFsmId", "SetVelocity", "SetSpeedMode", "SetBalanceMode"])
+        self.robot = Mock(spec_set=["GetFsmId", "SetFsmId", "Move", "StopMove", "SetVelocity",
+                                    "SetSpeedMode", "SetBalanceMode"])
         self.robot.GetFsmId.return_value = (0, 4)
-        for method in ("SetFsmId", "SetVelocity", "SetSpeedMode", "SetBalanceMode"):
+        for method in ("SetFsmId", "Move", "StopMove", "SetVelocity", "SetSpeedMode", "SetBalanceMode"):
             getattr(self.robot, method).side_effect = AssertionError(f"physical {method} called")
         self.factory = Mock(return_value=self.robot)
         discover = partial(cli.discover, make_client=self.factory)
@@ -99,10 +100,11 @@ class PreviewTests(unittest.TestCase):
         self.assertIn("q=0.250 rad, dq=-0.500 rad/s", text)
         before, after = text.split("[모의] SetFsmId(802)", 1)
         self.assertIn("[모의] 현재 FSM=4", before)
-        self.assertNotIn("[모의] SetVelocity(", before)
+        self.assertNotIn("[모의] Move(", before)
         self.assertIn("[모의] SetSpeedMode(1)", after)
-        self.assertEqual(after.count("[모의] SetVelocity(0.15, 0.0, 0.0,"), 2)
-        self.assertEqual(after.count("[모의] SetVelocity(0.0, 0.0, 0.0,"), 2)  # k and exit.
+        self.assertEqual(after.count("[모의] Move(0.15, 0.0, 0.0)"), 2)
+        self.assertEqual(after.count("[모의] StopMove()"), 2)  # k and exit.
+        self.assertNotIn("[모의] SetVelocity(", text)
         self.assertEqual(self.channel_events, [("open", "test-nic", 17), ("close", "test-nic", 17)])
         self.factory.assert_called_once_with("sport")
         self.robot.GetFsmId.assert_called_once_with()
@@ -114,8 +116,8 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(self.keyboard(args, [b"\x1b[A", b"k", b"\x1b[B", b"k", b",", b"\x04"]), 0)
         text = self.output.getvalue()
         self.assertIn("직진·후진 고정 속도 ±0.300 m/s", text)
-        self.assertIn("SetVelocity(0.3, 0.0, 0.0,", text)
-        self.assertEqual(text.count("SetVelocity(-0.3, 0.0, 0.0,"), 2)
+        self.assertIn("[모의] Move(0.3, 0.0, 0.0)", text)
+        self.assertEqual(text.count("[모의] Move(-0.3, 0.0, 0.0)"), 2)
         self.assertIn("종료 정지 · 속도 0 요청 수락", text)
         self.robot.GetFsmId.assert_called_once_with()
 
@@ -131,8 +133,8 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(self.keyboard(self.args, [b"i", OSError("TTY disconnected")]), 1)
         self.assertIn("TTY disconnected", self.errors.getvalue())
         text = self.output.getvalue()
-        self.assertIn("[모의] SetVelocity(0.15, 0.0, 0.0,", text)
-        self.assertIn("[모의] SetVelocity(0.0, 0.0, 0.0,", text)
+        self.assertIn("[모의] Move(0.15, 0.0, 0.0)", text)
+        self.assertIn("[모의] StopMove()", text)
         self.robot.GetFsmId.assert_called_once_with()
         self.connect.assert_not_called()
 
@@ -142,7 +144,8 @@ class PreviewTests(unittest.TestCase):
         text = self.output.getvalue()
         self.assertIn("2 Run 보행 (FSM 801)", " ".join(text.split()))
         self.assertNotIn("[모의] SetFsmId(", text)
-        self.assertIn("[모의] SetVelocity(7105) 수락 · FSM=801", text)
+        self.assertIn("[모의] Move(0.15, 0.0, 0.0)", text)
+        self.assertIn("수락 · FSM=801", text)
         self.robot.GetFsmId.assert_called_once_with()
         self.connect.assert_not_called()
 
@@ -157,7 +160,8 @@ class PreviewTests(unittest.TestCase):
                 self.assertIn(f"[시작 시점 실측] 현재 FSM={observed}", text)
                 self.assertIn(f"2 Run 보행 (FSM {requested})", " ".join(text.split()))
                 self.assertIn(f"[모의] SetFsmId({requested})", text)
-                self.assertIn(f"[모의] SetVelocity(7105) 수락 · FSM={requested}", text)
+                self.assertIn("[모의] Move(0.15, 0.0, 0.0)", text)
+                self.assertIn(f"수락 · FSM={requested}", text)
         self.assertEqual(self.robot.mock_calls, [call.GetFsmId(), call.GetFsmId()])
         self.connect.assert_not_called()
 

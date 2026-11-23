@@ -76,12 +76,13 @@ class Controller:
     """Dispatch one fresh key at a time. Merely constructing this class sends nothing."""
 
     def __init__(self, client, *, waist_3dof=False, run_fsm=LAB_RUN_FSM, straight_speed=None,
-                 clock=time.monotonic):
+                 timed_velocity=False, clock=time.monotonic):
         if type(run_fsm) is not int or run_fsm not in RUN_IDS:
             raise ValueError(f"지원하지 않는 Run FSM: {run_fsm}")
         if straight_speed is not None and not 0 < straight_speed <= MAX_STRAIGHT_SPEED:
             raise ValueError(f"--straight-speed는 0보다 크고 {MAX_STRAIGHT_SPEED:.2f} m/s 이하여야 합니다.")
         self.straight_speed = straight_speed
+        self.timed_velocity = timed_velocity
         self.modes = {**MODES, "2": run_mode(run_fsm)}
         self.client = client
         self.waist_3dof = waist_3dof
@@ -89,6 +90,8 @@ class Controller:
         self.linear_scale = self.turn_scale = 1.0
         self.exit_requested = False
         self._last_move_sent = 0.0
+        self._last_motion_check = 0.0
+        self._last_stop_at = None
         self._moving_key = None
         self._motion_fsm = None
         self._velocity = (0.0, 0.0, 0.0)
@@ -104,8 +107,8 @@ class Controller:
         return self._moving_key
 
     @staticmethod
-    def _check(operation, code):
-        if code != 0:
+    def _check(operation, code, *, allow_none=False):
+        if code != 0 and not (allow_none and code is None):
             raise RuntimeError(f"{operation} RPC code={code}")
 
     def _fsm(self):
@@ -122,7 +125,11 @@ class Controller:
 
     def _stop(self, force=False):
         if force or self._moving_key:
-            self._check("SetVelocity(0)", self.client.SetVelocity(0.0, 0.0, 0.0, PULSE_SECONDS))
+            self._last_stop_at = self.clock()
+            if self.timed_velocity:
+                self._check("SetVelocity(0)", self.client.SetVelocity(0.0, 0.0, 0.0, PULSE_SECONDS))
+            else:
+                self._check("StopMove", self.client.StopMove(), allow_none=True)
         self._moving_key = None
         summary = (f" · 이동 입력 {self._input_count}회 · 속도 RPC 수락 {self._accepted_count}회"
                    if self._input_count else "")
@@ -185,30 +192,36 @@ class Controller:
 
     def _move(self, key, received_at, cancel_requested):
         now = self.clock()
+        if self._last_stop_at is not None and received_at < self._last_stop_at:
+            return None  # A queued key from before StopMove cannot restart motion.
         deadline = min(now, received_at) + PULSE_SECONDS
         if key == self._moving_key and deadline < self._motion_deadline and now < self._motion_deadline:
             return None  # A buffered repeat cannot supersede a newer input.
         if now >= deadline:
             self._stop()
             return "이동 입력 시간이 만료되었습니다. 키를 다시 누르세요."
+        if not self.timed_velocity and key == self._moving_key and deadline == self._motion_deadline:
+            # Replaying the same event would start a new full SDK Move pulse.
+            return None
         vx, vy, yaw = VELOCITY[key]
-        self._velocity = (vx * self.linear_scale, vy * self.linear_scale, yaw * self.turn_scale)
+        velocity = (vx * self.linear_scale, vy * self.linear_scale, yaw * self.turn_scale)
         if self.straight_speed is not None and vy == 0 and yaw == 0:
-            self._velocity = (math.copysign(self.straight_speed, vx), 0.0, 0.0)
+            velocity = (math.copysign(self.straight_speed, vx), 0.0, 0.0)
         self._input_count += 1
         if key == self._moving_key and now - self._last_move_sent < REPEAT_INTERVAL:
             self._motion_deadline = deadline
+            self._velocity = velocity
             return None
-        return self._send_velocity(key, deadline, cancel_requested=cancel_requested)
+        return self._update_motion(key, deadline, velocity=velocity, cancel_requested=cancel_requested)
 
-    def _send_velocity(self, key, deadline, *, cancel_requested=None, expected_fsm=None):
+    def _update_motion(self, key, deadline, *, velocity=None, cancel_requested=None):
         current = self._fsm()
         walk_option = "허리 3자유도 보행(501)은 8 → Enter" if self.waist_3dof else "일반 보행(500)은 v → Enter"
         blocked = self._check_mode(current, GAIT_IDS, f"{walk_option}, Run은 메뉴의 ID를 확인하고 2 → Enter로 선택하세요.")
         if blocked:
             self._stop()
             return blocked
-        if expected_fsm is not None and current != expected_fsm:
+        if self._moving_key is not None and current != self._motion_fsm:
             self._stop()
             return f"보행 모드가 FSM {current}로 바뀌어 속도 0을 요청했습니다."
         # Check time after polling the TTY as both the poll and the FSM RPC can be delayed.
@@ -220,20 +233,33 @@ class Controller:
             return "상태 조회 중 이동 입력 시간이 만료되었습니다. 키를 다시 누르세요."
         if cancelled:
             return None  # The terminal will handle the queued stop or exit next.
+        self._last_motion_check = now
+        if velocity is None and not self.timed_velocity:
+            return None  # Stock Move starts a new one-second pulse on every call.
         # The request may reach the server even if the reply is lost.
         repeated = key == self._moving_key
         self._moving_key = key
         self._motion_fsm = current
         self._motion_deadline = deadline
         self._last_move_sent = now
+        if velocity is not None:
+            self._velocity = velocity
         vx, vy, yaw = self._velocity
         if self.exit_requested:
             raise EndSession()
-        self._check("SetVelocity(7105)", self.client.SetVelocity(vx, vy, yaw, duration))
+        if self.timed_velocity:
+            self._check("SetVelocity(7105)", self.client.SetVelocity(vx, vy, yaw, duration))
+        else:
+            self._check("Move(7105)", self.client.Move(vx, vy, yaw), allow_none=True)
         self._accepted_count += 1
         if not repeated:
-            message = (f"SetVelocity(7105) 수락 · FSM={current} · "
-                       f"vx={vx:.3f} vy={vy:.3f} m/s yaw={yaw:.3f} rad/s · {duration:.2f}초")
+            if self.timed_velocity:
+                operation, timing = "SetVelocity(7105)", f"{duration:.2f}초"
+            else:
+                remaining = max(0.0, deadline - self.clock())
+                operation, timing = "Move(7105)", f"SDK 명령 1초 · 입력 만료까지 {remaining:.2f}초"
+            message = (f"{operation} 수락 · FSM={current} · "
+                       f"vx={vx:.3f} vy={vy:.3f} m/s yaw={yaw:.3f} rad/s · {timing}")
             if current in RUN_IDS:
                 message += f"\n{current}(Run)에서 발걸음이 없으면 k로 정지하세요. 속도 응답만으로 실제 이동을 확인할 수 없습니다."
             return message
@@ -299,7 +325,7 @@ class Controller:
             return self._fault(error)
 
     def tick(self, input_waiting=lambda: False):
-        """Refresh within the input deadline. An empty message marks a silent RPC."""
+        """Monitor the active gait; timed velocities also refresh until input expires."""
         now = self.clock()
         if self._pending is not None and now >= self._confirm_deadline:
             self._pending = None
@@ -309,9 +335,9 @@ class Controller:
         try:
             if now >= self._motion_deadline:
                 return "키 반복 입력 만료 · 속도 0 요청 수락." + self._stop()
-            if now - self._last_move_sent >= REPEAT_INTERVAL and not input_waiting():
-                return self._send_velocity(self._moving_key, self._motion_deadline,
-                                           cancel_requested=input_waiting, expected_fsm=self._motion_fsm) or ""
+            if now - self._last_motion_check >= REPEAT_INTERVAL and not input_waiting():
+                return self._update_motion(self._moving_key, self._motion_deadline,
+                                           cancel_requested=input_waiting) or ""
         except Exception as error:
             return self._fault(error)
         return None

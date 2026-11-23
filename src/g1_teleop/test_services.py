@@ -1,10 +1,12 @@
 # Author: Codex (IIC)
+import json
 import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch, call
 
 from .services import motion_service_details
+from .__main__ import sdk_client
 
 
 class ServiceReadingsTests(unittest.TestCase):
@@ -38,3 +40,34 @@ class ServiceReadingsTests(unittest.TestCase):
     def test_version_available_when_list_fails(self):
         self.client._Call.side_effect = [(3104, None), (0, '{"packageVersion":"abc"}')]
         self.assertIn("기체 보고 패키지 버전=abc", motion_service_details())
+
+
+class NativeMoveTests(unittest.TestCase):
+    def test_official_wrappers_keep_wire_values_and_surface_rejections(self):
+        try:
+            from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
+        except (ImportError, OSError) as error:
+            self.skipTest(f"Unitree SDK unavailable: {error}")
+
+        # ClientBase constructs its DDS stub inside __init__. Replace it
+        # before constructing either service client, so the test stays offline.
+        with patch("unitree_sdk2py.rpc.client_base.ClientStub", autospec=True) as stub:
+            for service in ("sport", "loco"):
+                with self.subTest(service=service):
+                    client = sdk_client(service)
+                    stub.assert_called_with(service)
+                    self.assertIs(type(client).Move, LocoClient.Move)
+                    self.assertIs(type(client).StopMove, LocoClient.StopMove)
+                    with patch.object(client, "_Call", return_value=(0, "")) as rpc:
+                        client.Move(0.3, 0.0, 0.0)
+                        client.StopMove()
+                        payloads = [(api, json.loads(body)) for (api, body), _ in rpc.call_args_list]
+                        self.assertEqual(payloads, [
+                            (7105, {"velocity": [0.3, 0.0, 0.0], "duration": 1.0}),
+                            (7105, {"velocity": [0.0, 0.0, 0.0], "duration": 1.0}),
+                        ])
+                        rpc.return_value = 3104, None
+                        with self.assertRaisesRegex(RuntimeError, "RPC code=3104"):
+                            client.Move(0.3, 0.0, 0.0)
+                        with self.assertRaisesRegex(RuntimeError, "RPC code=3104"):
+                            client.StopMove()

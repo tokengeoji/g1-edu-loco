@@ -41,7 +41,7 @@ KEY_HELP = """
 ← / → = 소문자 j / l  ·  제자리 회전 요청 (vx=vy=0)
 대문자 J / L (Shift+j / Shift+l)  ·  왼쪽 / 오른쪽 옆걸음 요청 (vx=yaw=0)
 ↑ / ↓ = i / ,  ·  전진 / 후진 요청
-이동 요청은 최대 10 Hz로 갱신 · 키 반복이 끊기면 마지막 입력 후 최대 1초   q/z 속도 올림/내림
+q/z 속도 올림/내림
 k 또는 Space 정지   Ctrl+C 정지 요청 후 종료   f 현재 모드   ? 전체 키
 속도 요청 수락은 보행 서비스의 응답입니다. 실제 발걸음과 회전은 현장에서 확인하세요."""
 
@@ -71,6 +71,12 @@ class DryClient:
         print(f"[모의] SetSpeedMode({value})", flush=True)
         return 0
 
+    def Move(self, vx, vy, yaw):
+        print(f"[모의] Move({vx}, {vy}, {yaw})", flush=True)
+
+    def StopMove(self):
+        print("[모의] StopMove()", flush=True)
+
     def SetVelocity(self, vx, vy, yaw, duration):
         print(f"[모의] SetVelocity({vx}, {vy}, {yaw}, {duration:.3f})", flush=True)
         return 0
@@ -80,12 +86,21 @@ def sdk_client(service):
     from unitree_sdk2py.g1.loco.g1_loco_api import LOCO_SERVICE_NAME
     from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
 
+    class CheckedLocoClient(LocoClient):
+        def SetVelocity(self, vx, vy, omega, duration=1.0):
+            # The official Move and StopMove discard SetVelocity's return value.
+            # Propagate a rejected RPC before either can return apparent success.
+            code = super().SetVelocity(vx, vy, omega, duration)
+            if code != 0:
+                raise RuntimeError(f"SetVelocity(7105) RPC code={code}")
+            return code
+
     if service == LOCO_SERVICE_NAME:
-        client = LocoClient()
+        client = CheckedLocoClient()
     elif service == "loco":
         from unitree_sdk2py.rpc.client import Client
 
-        class LegacyLocoClient(LocoClient):
+        class LegacyLocoClient(CheckedLocoClient):
             def __init__(self):
                 # Before ai_sport 8.2 Unitree used this endpoint for the same
                 # RPCs. Inherit the pinned SDK's Init and all locomotion methods.
@@ -305,6 +320,11 @@ def interact(controller, *, live=False):
         controller.exit_requested = True
 
     help_text = mode_menu(controller.modes) + KEY_HELP
+    if controller.timed_velocity:
+        help_text += "\nSetVelocity · 입력 기한 안에서 최대 10 Hz로 남은 유효시간을 갱신합니다."
+    else:
+        help_text += "\nUnitree Move · 새 키와 누르고 있는 키의 반복 입력에만 전송합니다 (최대 10 Hz)."
+    help_text += "\n마지막 키 입력 후 1초에 정지를 요청합니다."
     if controller.straight_speed is not None:
         help_text += (f"\n직진·후진 고정 속도 ±{controller.straight_speed:.3f} m/s · "
                       "i/, 또는 ↑/↓ · 횡속도 0 · 회전속도 0")
@@ -362,6 +382,8 @@ def main(argv=None):
     parser.add_argument("--run-fsm", type=int, choices=RUN_IDS,
                         help="2번 키로 요청할 Run ID (기본: 시작 시 확인된 801/802, 그 외에는 연구실 802)")
     parser.add_argument("--waist-3dof", action="store_true", help="허리 3자유도 모델의 FSM 501 허용")
+    parser.add_argument("--timed-velocity", action="store_true",
+                        help="이전 SetVelocity 방식으로 남은 유효시간을 갱신 (기본: Unitree Move / StopMove)")
     parser.add_argument("--straight-speed", type=float, metavar="M/S",
                         help=f"직진·후진의 속도 크기만 고정 (0 초과~{MAX_STRAIGHT_SPEED:.2f} m/s). "
                              "생략하면 기본 0.15 m/s에 키 배율 적용")
@@ -370,6 +392,8 @@ def main(argv=None):
         parser.error("--live / --preview / --status / --feedback 실행에는 --interface NIC가 필요합니다.")
     if args.domain < 0:
         parser.error("--domain은 0 이상의 정수여야 합니다.")
+    if args.timed_velocity and (args.status or args.feedback):
+        parser.error("--timed-velocity는 방향 키를 사용하는 모드에서만 적용됩니다.")
     if args.straight_speed is not None:
         if not 0 < args.straight_speed <= MAX_STRAIGHT_SPEED:
             parser.error(f"--straight-speed는 0보다 크고 {MAX_STRAIGHT_SPEED:.2f} m/s 이하여야 합니다.")
@@ -412,7 +436,7 @@ def main(argv=None):
                 show(f"오프라인 모의 제어 · 초기 FSM={display_fsm(fsm)}")
             default_run = fsm if fsm in RUN_IDS else LAB_RUN_FSM
             controller = Controller(client, waist_3dof=args.waist_3dof, run_fsm=args.run_fsm or default_run,
-                                    straight_speed=args.straight_speed)
+                                    straight_speed=args.straight_speed, timed_velocity=args.timed_velocity)
             interact(controller, live=args.live)
     except EndSession:
         return 0

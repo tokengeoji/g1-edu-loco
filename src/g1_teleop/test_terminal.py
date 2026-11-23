@@ -219,11 +219,27 @@ class TerminalLoopTests(unittest.TestCase):
         os.write(self.master, b"\x04")
         self.assert_restored()
 
-    def test_first_arrow_moves_in_802_then_idle_stop_and_eof_restore_terminal(self):
+    def test_one_arrow_sends_one_move_then_idle_stop_and_eof_restores_terminal(self):
         self.start()
         os.write(self.master, b"\x1b[A")
-        self.await_output("SetVelocity(0.15, 0.0, 0.0, ")
-        self.await_output("SetVelocity(0.0, 0.0, 0.0, ")
+        transcript = self.await_output("[모의] StopMove()").decode()
+        self.assertEqual(transcript.count("[모의] Move(0.15, 0.0, 0.0)"), 1)
+        self.assertNotIn("[모의] SetVelocity(", transcript)
+        self.await_output("이동 입력 1회 · 속도 RPC 수락 1회")
+        os.write(self.master, b"\x04")
+        self.assert_restored()
+
+    def test_fresh_direction_repeat_in_default_mode_sends_a_second_move(self):
+        self.start()
+        os.write(self.master, b"i")
+        self.await_output("[모의] Move(0.15, 0.0, 0.0)")
+        # Space two input events beyond the controller's 10 Hz rate limit.
+        time.sleep(0.20)
+        os.write(self.master, b"i")
+        self.await_output("[모의] Move(0.15, 0.0, 0.0)")
+        os.write(self.master, b"k")
+        self.await_output("[모의] StopMove()")
+        self.await_output("이동 입력 2회 · 속도 RPC 수락 2회")
         os.write(self.master, b"\x04")
         self.assert_restored()
 
@@ -245,19 +261,20 @@ raise SystemExit(cli.main())
         # the stale-input drain and marks the next keystroke as fresh.
         transcript = self.await_output("SetSpeedMode(1) 수락")
         self.assertIn(b"SetSpeedMode(1)", transcript)
+        self.assertNotIn(b"Move(", transcript)
         self.assertNotIn(b"SetVelocity(", transcript)
         os.write(self.master, b"i")
-        self.await_output("SetVelocity(0.15, 0.0, 0.0, ")
+        self.await_output("[모의] Move(0.15, 0.0, 0.0)")
         os.write(self.master, b"\x04")
         self.assert_restored()
 
     def test_reverse_arc_is_motion_and_does_not_request_regular_mode(self):
         self.start()
         os.write(self.master, b"m")
-        seen = self.await_output("SetVelocity(-0.15, 0.0, -0.3, ")
+        seen = self.await_output("[모의] Move(-0.15, 0.0, -0.3)")
         self.assertNotIn(b"SetFsmId(", seen)
         os.write(self.master, b"k")
-        self.await_output("SetVelocity(0.0, 0.0, 0.0, ")
+        self.await_output("[모의] StopMove()")
         os.write(self.master, b"\x04")
         self.assert_restored()
 
@@ -266,16 +283,19 @@ raise SystemExit(cli.main())
             with self.subTest(signal=sig):
                 self.start()
                 os.write(self.master, b"i")
-                self.await_output("SetVelocity(0.15, 0.0, 0.0, ")
+                self.await_output("[모의] Move(0.15, 0.0, 0.0)")
                 self.proc.send_signal(sig)
-                self.await_output("SetVelocity(0.0, 0.0, 0.0, ")
+                self.await_output("[모의] StopMove()")
                 self.assert_restored()
 
-    def start_live_spy(self, *, delay="", zero_code=0):
+    def start_live_spy(self, *, delay="", zero_code=0, timed_velocity=False):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.velocities = Path(directory.name) / "velocities"
         self.velocities.touch()
+        args = ["--live", "--interface", "lo", "--domain", "0"]
+        if timed_velocity:
+            args.append("--timed-velocity")
         return self.start(f"""
 import fcntl
 import os
@@ -313,8 +333,17 @@ class SpyClient:
                 raise RuntimeError("key did not arrive during FSM read")
         return 0, 802
 
+    def Move(self, vx, vy, yaw):
+        return self.record("move")
+
+    def StopMove(self):
+        return self.record("zero")
+
     def SetVelocity(self, vx, vy, yaw, duration):
-        command = "move" if any((vx, vy, yaw)) else "zero"
+        assert {timed_velocity!r}, "unexpected timed velocity call"
+        return self.record("move" if any((vx, vy, yaw)) else "zero")
+
+    def record(self, command):
         with open({str(self.velocities)!r}, "a") as out:
             print(command, file=out)
         print("wire " + command + " after FSM read", self.fsm_reads, flush=True)
@@ -324,7 +353,7 @@ class SpyClient:
 
 cli.LIVE_LOCK = {str(Path(directory.name) / "lock")!r}
 cli.connect = lambda *args: (SpyClient(), "sport", 802)
-sys.exit(cli.main(["--live", "--interface", "lo", "--domain", "0"]))
+sys.exit(cli.main({args!r}))
 """)
 
     def test_typed_ctrl_c_during_move_waits_for_zero_even_after_second_interrupt(self):
@@ -352,8 +381,8 @@ sys.exit(cli.main(["--live", "--interface", "lo", "--domain", "0"]))
                 self.assert_restored()
                 self.assertEqual(self.velocities.read_text().splitlines(), expected)
 
-    def test_typed_ctrl_c_after_idle_timeout_requests_new_final_zero(self):
-        self.start_live_spy()
+    def test_timed_refreshes_end_with_idle_stop_and_ctrl_c_requests_final_zero(self):
+        self.start_live_spy(timed_velocity=True)
         os.write(self.master, b"i")
         self.await_output("키 반복 입력 만료")
         os.write(self.master, b"\x03")
@@ -367,7 +396,7 @@ sys.exit(cli.main(["--live", "--interface", "lo", "--domain", "0"]))
     def test_stop_during_initial_or_refresh_fsm_read_preempts_velocity_send(self):
         for delay, expected in [("initial", ["zero", "zero"]), ("refresh", ["move", "zero", "zero"])]:
             with self.subTest(delay=delay):
-                self.start_live_spy(delay=delay)
+                self.start_live_spy(delay=delay, timed_velocity=(delay == "refresh"))
                 os.write(self.master, b"i")
                 self.await_output("waiting for key during FSM read")
                 os.write(self.master, b"k")
@@ -404,21 +433,21 @@ sys.exit(cli.main(["--live", "--interface", "lo", "--domain", "0"]))
 import sys
 import time
 from {__package__} import __main__ as cli
-original = cli.DryClient.SetVelocity
-def slow(self, vx, vy, yaw, duration):
+original = cli.DryClient.Move
+def slow(self, vx, vy, yaw):
     if vx > 0:
         print('in RPC', flush=True)
         time.sleep(0.15)
-    return original(self, vx, vy, yaw, duration)
-cli.DryClient.SetVelocity = slow
+    return original(self, vx, vy, yaw)
+cli.DryClient.Move = slow
 sys.exit(cli.main())
 """)
         os.write(self.master, b"i")
         self.await_output("in RPC")
         os.write(self.master, b",")
-        self.await_output("SetVelocity(0.15, 0.0, 0.0, ")
+        self.await_output("[모의] Move(0.15, 0.0, 0.0)")
         os.write(self.master, b"\x04")
         self.assert_restored()
         while select.select([self.master], [], [], 0)[0]:
             self.output += os.read(self.master, 8192)
-        self.assertNotIn(b"SetVelocity(-0.15", self.output)
+        self.assertNotIn(b"Move(-0.15", self.output)

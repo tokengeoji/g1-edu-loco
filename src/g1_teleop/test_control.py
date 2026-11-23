@@ -12,6 +12,7 @@ class NativeClient:
         self.read_code = self.write_code = self.velocity_code = 0
         self.on_read = lambda: None
         self.calls = []
+        self.wrapper_calls = []
 
     def GetFsmId(self):
         self.calls.append(("read",))
@@ -35,6 +36,14 @@ class NativeClient:
         self.calls.append(("velocity", vx, vy, yaw, duration))
         return self.velocity_code
 
+    def Move(self, vx, vy, yaw):
+        self.wrapper_calls.append(("Move", vx, vy, yaw))
+        return self.SetVelocity(vx, vy, yaw, 1) or None
+
+    def StopMove(self):
+        self.wrapper_calls.append(("StopMove",))
+        return self.SetVelocity(0, 0, 0, 1) or None
+
 
 ZERO = ("velocity", 0.0, 0.0, 0.0, PULSE_SECONDS)
 
@@ -47,6 +56,9 @@ class ControllerTest(unittest.TestCase):
 
     def advance(self, amount):
         self.now += amount
+
+    def use_timed_velocity(self):
+        self.control = Controller(self.client, timed_velocity=True, clock=lambda: self.now)
 
     def request(self, key):
         self.control.handle(key)
@@ -86,9 +98,93 @@ class ControllerTest(unittest.TestCase):
                 self.client.calls.clear()
                 self.control.handle(key)
                 self.assertEqual(self.client.calls, [("read",), ("velocity", *vector, PULSE_SECONDS)])
+                self.assertEqual(self.client.wrapper_calls[-1], ("Move", *vector))
+
+    def test_stock_move_tap_checks_fsm_until_expiry_without_resending(self):
+        start = self.now
+        self.client.on_read = lambda: self.advance(.15)
+        move = self.control.handle("i")
+        self.assertIn("Move(7105) 수락", move)
+        self.assertIn("SDK 명령 1초 · 입력 만료까지 0.85초", move)
+        self.client.on_read = lambda: None
+        self.now = start + .5
+        self.control.tick()
+        self.control.tick()
+        self.now = start + .75
+        self.control.tick()
+        self.assertEqual(self.client.calls, [("read",), ("velocity", .15, 0, 0, 1), ("read",), ("read",)])
+        self.now = start + 1
+        self.assertIn("이동 입력 1회 · 속도 RPC 수락 1회", self.control.tick())
+        self.control.tick()
+        self.control.close()
+        self.assertEqual(self.client.wrapper_calls, [("Move", .15, 0, 0), ("StopMove",)])
+
+    def test_stock_real_repeat_rate_limit_and_read_only_poll_are_independent(self):
+        self.control.handle("i")
+        self.advance(.05)
+        self.control.handle("i")
+        self.assertEqual(self.client.wrapper_calls, [("Move", .15, 0, 0)])
+        self.advance(.06)
+        self.control.tick()
+        self.advance(.01)
+        self.control.handle("i")
+        self.control.handle("o")
+        self.assertEqual(self.client.wrapper_calls, [("Move", .15, 0, 0), ("Move", .15, 0, 0),
+                                                    ("Move", .15, 0, -.3)])
+        self.advance(.3)
+        self.control.tick()
+        self.assertIn("이동 입력 4회 · 속도 RPC 수락 3회", self.control.close())
+
+    def test_stock_replayed_input_does_not_issue_a_new_full_second_pulse(self):
+        start = self.now
+        self.control.handle("i", received_at=start)
+        self.advance(.4)
+        self.control.handle("i", received_at=start)
+        self.control.handle("k")
+        self.advance(.1)
+        self.control.handle("i", received_at=start+.1)
+        self.control.tick()
+        self.assertEqual(self.client.wrapper_calls, [("Move", .15, 0, 0), ("StopMove",)])
+        self.client.on_read = lambda: self.advance(1.1)
+        self.assertIn("만료", self.control.handle(","))
+        self.assertEqual(len(self.client.wrapper_calls), 2)
+
+    def test_stock_slow_timer_read_stops_on_expiry_or_changed_fsm(self):
+        for state, read_time in [(802, 1.0), (801, .01)]:
+            with self.subTest(state=state):
+                client = NativeClient()
+                control = Controller(client, clock=lambda: self.now)
+                control.handle(",")
+                self.advance(.2)
+                client.state = state
+                client.on_read = lambda: self.advance(read_time)
+                self.assertIsNotNone(control.tick())
+                self.assertEqual(client.wrapper_calls, [("Move", -.15, 0, 0), ("StopMove",)])
+                self.assertIsNone(control.tick())
+
+    def test_stock_wrapper_errors_trigger_stop_and_close_retries_only_stop(self):
+        for failure in (24, RuntimeError("SetVelocity(7105) RPC code=24")):
+            with self.subTest(failure=failure):
+                client = NativeClient()
+                control = Controller(client, clock=lambda: self.now)
+                client.Move = Mock(side_effect=[failure])
+                self.assertIn("24", control.handle("i"))
+                client.Move.assert_called_once_with(.15, 0, 0)
+                self.assertEqual(client.wrapper_calls, [("StopMove",)])
+                self.advance(.2)
+                self.assertIsNone(control.tick())
+                client.StopMove = Mock(side_effect=[RuntimeError("lost stop reply"), None])
+                self.assertIn("속도 0 요청 수락", control.close(force_stop=True))
+                self.assertEqual(client.StopMove.call_count, 2)
+
+    def test_stock_suppresses_command_if_stop_arrives_during_read(self):
+        self.control.handle("J", cancel_requested=lambda: True)
+        self.assertEqual(self.client.calls, [("read",)])
+        self.control.handle("k")
+        self.assertEqual(self.client.wrapper_calls, [("StopMove",)])
 
     def test_fixed_straight_speed_keeps_sign_and_ignores_scale_only_on_pure_x(self):
-        control = Controller(self.client, straight_speed=.20, clock=lambda: self.now)
+        control = Controller(self.client, straight_speed=.20, timed_velocity=True, clock=lambda: self.now)
         self.assertEqual(self.client.calls, [])
         control.handle("q")
         for key, sign in (("i", 1), ("I", 1), (",", -1), ("<", -1)):
@@ -104,6 +200,7 @@ class ControllerTest(unittest.TestCase):
         self.assertAlmostEqual(self.client.calls[-1][3], -.30 * 1.1)
 
     def test_tap_refreshes_until_its_original_deadline_then_zeros_once(self):
+        self.use_timed_velocity()
         start = self.now
         self.control.handle("i")
         self.control.handle("q")  # A speed change applies to the next direction input.
@@ -126,6 +223,7 @@ class ControllerTest(unittest.TestCase):
         self.assertIn("이동 입력 1회 · 속도 RPC 수락 4회", summary)
 
     def test_throttled_fresh_repeat_extends_deadline_and_older_repeat_cannot_shorten_it(self):
+        self.use_timed_velocity()
         start = self.now
         self.control.handle("i")
         self.advance(.5)
@@ -142,6 +240,7 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(self.client.calls[-1], ZERO)
 
     def test_refresh_uses_time_left_after_fsm_lookup_and_stops_if_lookup_expires(self):
+        self.use_timed_velocity()
         self.control.handle("o")
         self.advance(.25)
         self.client.on_read = lambda: self.advance(.125)
@@ -156,6 +255,7 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(self.client.calls, [("read",), ZERO])
 
     def test_refresh_after_failed_fsm_read_waits_for_new_input(self):
+        self.use_timed_velocity()
         self.control.handle("i")
         self.client.calls.clear()
         self.client.read_code = 8
@@ -168,6 +268,7 @@ class ControllerTest(unittest.TestCase):
         self.assertIn("GetFsmId RPC code=8", message)
 
     def test_refresh_stops_if_fsm_changes_to_another_allowed_gait(self):
+        self.use_timed_velocity()
         self.control.handle("i")
         self.client.calls.clear()
         self.client.state = 500
@@ -181,6 +282,7 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(self.client.calls[-1], ("velocity", .15, 0, 0, PULSE_SECONDS))
 
     def test_refresh_yields_to_input_queued_before_or_during_fsm_lookup(self):
+        self.use_timed_velocity()
         self.control.handle("i")
         self.client.calls.clear()
         self.advance(.25)
@@ -217,6 +319,7 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(self.client.calls, [("read",), ZERO])
 
     def test_slow_lookup_cannot_replay_expired_movement(self):
+        self.use_timed_velocity()
         self.client.on_read = lambda: self.advance(PULSE_SECONDS + .01)
         self.control.handle("i")
         self.assertEqual(self.client.calls, [("read",)])
@@ -355,6 +458,7 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(self.client.calls, [("read",), ("velocity", -.15, 0, -.3, PULSE_SECONDS)])
 
     def test_queued_repeat_uses_original_deadline_and_cannot_revive_stale_motion(self):
+        self.use_timed_velocity()
         self.control.handle("i")
         stamp = self.now
         self.advance(.4)
@@ -377,6 +481,7 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(self.client.calls[-1], ("velocity", -.15, 0, 0, PULSE_SECONDS))
 
     def test_timer_sends_only_remaining_pulse_until_input_deadline(self):
+        self.use_timed_velocity()
         self.control.handle("i")
         start = self.now
         for dt in (.2, .4, .6, .8):
@@ -391,6 +496,7 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(self.client.calls.count(ZERO), 1)
 
     def test_rate_limited_repeat_renews_deadline_but_speed_key_does_not_change_active_command(self):
+        self.use_timed_velocity()
         self.control.handle("i")
         self.advance(.075)
         self.control.handle("i")
@@ -403,6 +509,7 @@ class ControllerTest(unittest.TestCase):
         self.assertIn("이동 입력 2회", self.control.tick())
 
     def test_timer_read_gives_precedence_to_queued_keys_and_external_mode_changes(self):
+        self.use_timed_velocity()
         self.control.handle("i")
         self.advance(.2)
         self.control.tick(lambda: True)
@@ -494,6 +601,7 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(self.client.calls, [("read",), ("read",)])
 
     def test_velocity_failure_stops_and_waits_for_a_fresh_key(self):
+        self.use_timed_velocity()
         self.client.velocity_code = 23
         message = self.control.handle("j")
         self.assertIn("SetVelocity(7105) RPC code=23", message)
