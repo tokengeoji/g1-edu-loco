@@ -15,11 +15,27 @@
 
 Windows Ethernet 포트의 주소를 연구실 스위치와 같은 `192.168.123.0/24`의 미사용 주소로 설정한다. 다음 명령에서 TCP 연결 결과가 `True`이고, 인터페이스와 출발 주소가 유선 연결인지 확인한다. PC2의 현장 주소는 `192.168.123.164`다.
 
-**Windows PowerShell · 유선 접속 점검과 이미지 빌드**
+<a id="linux-engine"></a>
+
+**Windows PowerShell · 유선과 로컬 Docker 엔진 점검**
 
 ```powershell
 Test-NetConnection 192.168.123.164 -Port 22 -InformationLevel Detailed
+docker desktop start
 docker info --format '{{.OSType}}/{{.Architecture}}'
+```
+
+`TcpTestSucceeded : True`이면 Windows에서 G1 PC2의 SSH 포트까지 연결된 상태다. `dockerDesktopLinuxEngine` 파이프를 찾을 수 없다는 오류는 Windows Docker CLI가 로컬 Linux 엔진에 연결하지 못했다는 뜻이다. 이때 빌드는 시작되지 않는다.
+
+- `docker desktop start`를 인식하지 못하면 Windows 시작 메뉴에서 **Docker Desktop**을 실행한 뒤 엔진이 시작될 때까지 기다린다. 앱이 설치되어 있지 않다면 공식 Windows 설치 안내를 따른다.
+- `docker info`가 오류 없이 **`linux/x86_64` 또는 `linux/amd64`**를 출력하면 아래 Windows용 빌드를 진행한다. `windows/...`가 나오면 작업 표시줄의 Docker 메뉴에서 **Switch to Linux containers**를 선택하고 다시 확인한다.
+- 앱을 열었는데도 같은 오류라면 Docker Desktop 화면의 오류 문구와 `docker version`, `docker context ls` 출력을 확인한다. WSL 2 백엔드를 사용한다면 `wsl --status`, `wsl --version`도 확인한다.
+
+[Docker Desktop 시작 명령](https://docs.docker.com/reference/cli/docker/desktop/start/) · [Windows 설치와 Linux 컨테이너 전환](https://docs.docker.com/desktop/setup/install/windows-install/)
+
+**Windows PowerShell · 엔진 확인 후 x64 개발 이미지 빌드**
+
+```powershell
 docker build --pull=false --platform linux/amd64 -f docker/windows/Dockerfile -t g1-jsj:windows-foxy 'https://github.com/tokengeoji/g1-edu-loco.git#jsj'
 ```
 

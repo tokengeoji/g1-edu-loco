@@ -133,6 +133,8 @@ G1_CAMERA_IFACE=eth0 G1_CAMERA_DOMAIN=0 g1 camera remote serve
 
 Docker Desktop을 Linux 컨테이너 모드로 실행한다. 유선 어댑터를 PC2와 같은 서브넷의 미사용 주소로 설정한다. 아래 예시는 PC2가 `192.168.123.164`인 경우다. `TcpTestSucceeded`가 `True`인지 확인한다. 인터넷을 사용해 최신 개발 이미지를 빌드하고 최초 한 번만 `docker run`을 실행한다. 같은 버전의 개발 컨테이너를 재시작할 때는 `docker start jsj-g1-dev`를 쓴다. [Windows 설정·기존 이미지 교체](windows-development-pc.md)
 
+`dockerDesktopLinuxEngine` 파이프 오류가 나오면 [Windows Linux 엔진 시작·확인](windows-development-pc.md#linux-engine)을 먼저 따른다. Windows에서 빌드할 이미지는 `g1-jsj:windows-foxy`다.
+
 **Windows PowerShell · 최초 설치**
 
 ```powershell
