@@ -233,10 +233,12 @@ def tty_dds(args, *, verbose=True):
         raise CameraError(f"DDS_INSPECTION_FAILED: {exc}") from exc
 
 
-def _save_depth_preview(path, image):
+def save_depth_preview(path, image):
     """Write an 8-bit PNG for inspection; reserve black for missing depth."""
     valid = image != 0
     depths = image[valid]
+    if not depths.size:
+        raise ValueError("this frame has no valid depth")
     near, far = int(depths.min()), int(depths.max())
     pixels = np.zeros_like(image, dtype=np.uint8)
     pixels[valid] = 255 - 254 * (depths.astype(float) - near) / max(1, far - near)
@@ -288,7 +290,7 @@ def tty_usb(args, *, verbose=True, preview_path=None):
     if first_valid is not None:
         number, image = first_valid
         try:
-            result["depth_preview"] = dict(_save_depth_preview(preview_path, image), frame_number=number)
+            result["depth_preview"] = dict(save_depth_preview(preview_path, image), frame_number=number)
         except (ImportError, OSError, RuntimeError) as error:
             result["preview_error"] = str(error)
     return result

@@ -3,7 +3,13 @@
 
 G1-EDU PC2에서 CPU 이미지 **`g1-jsj:base`**를 한 번 빌드하면 Ubuntu·ROS 2·공식 SDK와 운영 도구가 함께 설치된다. **`jsj-g1-tools`**는 이 이미지로 생성하는 컨테이너 이름이다. 각 G1 터미널에서 같은 컨테이너에 접속해 배터리·모터 온도, 키보드 텔레옵, RealSense D435i와 계단 치수를 확인한다. 텔레옵은 기체의 Unitree 고수준 보행기에 명령을 보낸다. [IIC 작업 규칙](AGENTS.md)
 
-**처음 키보드를 연결한다면 [로봇을 움직이기 전 텔레옵 점검](docs/teleop-preflight.md)을 따른다.** 실제 모터·보행 상태를 읽고 방향키와 정지를 모의 입력하는 현장 절차다.
+**[현장 시작 가이드](docs/quickstart-ko.md)**에서 본인 상황에 맞춰 시작한다. 이미 `g1 health eth0`가 동작하는 PC2는 기존 컨테이너에서 최신 코드를 적용하고, 처음 설치하는 PC2는 이미지를 빌드한다. 각 명령에는 G1 호스트·G1 컨테이너·Windows PowerShell 중 입력할 위치가 표시돼 있다.
+
+| 현장에서 확인할 것 | 바로 가기 |
+| --- | --- |
+| 모터 명령 전 키 배치·정지 확인, FSM 802에서 전진·후진이 안 됐던 이유와 비교 시험 | [보행 전 점검](docs/teleop-preflight.md) · [전후진 명령과 실제 변위 기록](src/g1_teleop/README.md#no-motion) |
+| 머리 D435i 켜기, Windows에서 컬러·깊이를 TTY 또는 RViz2로 확인 | [카메라 수신 검사](docs/camera-check.md) · [Windows Docker 설정](docs/windows-development-pc.md) |
+| 계단 촬영·보정·치수 계산, 폭이 `null`인 이유, G1의 디딤 가능성 판정 설계 | [측정 명령·출력값·착지 판정 계획](docs/stair-analysis.md) |
 
 [Windows Docker에서 G1 영상·상태 보기](docs/windows-development-pc.md) · [Linux 개발 PC와 PC2의 ROS 2·Cyclone DDS 설정](docs/development-pc.md) · [이미지 빌드](#pc2) · [컨테이너 생성](#create) · [온도·텔레옵](#monitoring) · [카메라](#camera) · [계단 계산](#geometry) · [재개·기록 보관](#resume)
 
@@ -216,7 +222,9 @@ g1 monitor record --nic eth0 --domain 0 --run "$RUN_ID" --seconds 10
 
 실험 디렉터리 `/workspace/runs/stairs-01/`의 `depth/`에 깊이, `state/`에 상태, `geometry/`에 계산 결과가 저장된다. 깊이 기록을 마친 터미널에서 같은 `RUN_ID`로 진행한다. 새 내부 셸을 열었다면 그 셸에서 `RUN_ID=stairs-01`을 실제 기록 이름으로 다시 설정한다.
 
-광학 좌표를 **앞·왼쪽·위** 기준으로 바꾸려면 실측 회전·이동이 필요하다. `source_frame`은 깊이 기록의 `frame_id`와 맞아야 한다. 기체 자세나 센서 장착이 바뀌면 다시 보정한다. 다음 명령이 입력을 기다리면 실측 JSON을 붙여넣고 새 줄에서 Ctrl+D를 누른다. 이미 같은 실험에 저장한 보정 파일이 있으면 파일 입력을 건너뛴다. [보정 JSON 형식](config/calibration.example.json)
+광학 좌표를 **앞·왼쪽·위** 기준으로 바꾸려면 실측 회전·이동이 필요하다. 처음 보정한다면 `g1 stairs calibrate`로 프레임에서 고른 기준점과 현장에서 잰 좌표를 맞추고 독립점의 오차를 확인한다. [실측 대응점으로 보정 파일 만들기](docs/stair-analysis.md#calibrate)
+
+이미 실측한 JSON이 있는 경우에만 아래 방법으로 입력한다. `source_frame`은 깊이 기록의 `frame_id`와 맞아야 한다. 기체 자세나 센서 장착이 바뀌면 다시 보정한다. 명령이 기다리면 실측 JSON을 붙여넣고 새 줄에서 Ctrl+D를 누른다. 보정 파일을 이미 저장했다면 바로 측정 단계로 넘어간다. [보정 JSON 형식](config/calibration.example.json)
 
 **컨테이너 내부 · 실측 보정 파일을 처음 저장할 때**
 
@@ -239,7 +247,9 @@ g1 stairs measure --run "$RUN_ID" --calibration "/workspace/runs/$RUN_ID/measure
 head -n 1 "/workspace/runs/$RUN_ID/geometry/stairs.jsonl"
 ```
 
-기록 때 `--calibration`을 제공했다면 측정 단계에서 보정 인자를 생략할 수 있다. 기본은 첫 프레임이며 전체는 `--all-frames`다. `riser_height_m`, `tread_depth_m`, `width_m`는 미터 단위다. 양쪽 경계가 보이지 않아 폭을 결정할 수 없으면 `width_m`은 `null`이다. 현재 도구는 계단 치수까지 계산한다. G1 발바닥이 들어갈 착지 영역, 다음 발 위치, 해당 계단의 보행 가능 여부는 계산하지 않는다.
+기록 때 `--calibration`을 제공했다면 측정 단계에서 보정 인자를 생략할 수 있다. 기본은 첫 프레임이며 전체는 `--all-frames`다. `riser_height_m`은 인접 면의 단차, `tread_depth_m`은 디딤면의 앞뒤 깊이, `width_m`은 좌우 폭이다. 단위는 미터다. 한쪽 경계만 보이면 해당 축의 치수는 `null`이 된다. 수평면 후보에는 책상 같은 물체도 포함될 수 있다. 발바닥 전체를 지지할 영역, 현재 발에서의 도달 범위, 지지 전환 중 균형은 후속 개발 항목이다. [실측 보정·출력 판독·발 디딤 판정 설계](docs/stair-analysis.md)
+
+현재 `g1 teleop`의 802 전후진 키는 기체의 고수준 속도 API를 호출한다. 위에서 계산한 계단 치수는 기록 파일에 남으며, 802나 모터로 전달되는 경로는 없다. 향후 계단 보행 정책을 도입한다면 운영자가 정지 상태에서 별도의 보행 제어기를 선택하고, 키보드는 선택한 제어기에 진행 의도를 전달하는 구성을 검토한다. 이 브랜치에 실기체 계단 정책을 켜는 키는 아직 없다.
 
 <a id="sdk"></a>
 

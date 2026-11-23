@@ -7,27 +7,18 @@ from pathlib import Path
 
 import numpy as np
 
-from g1stairs.session import create_part, dump_line, read_json, read_jsonl, run_path
+from g1stairs.session import create_part, dump_line, read_json, read_jsonl, recorded_frame_path, run_path
 
+from . import calibration_points
 from .projection import Calibration, camera_rays, deproject
 from .surfaces import MeasurementOptions, measure_surfaces
-
-
-def _frame_file(depth_path, sample):
-    relative = Path(sample["file"])
-    if len(relative.parts) != 2 or relative.parts[0] != "frames" or relative.suffix != ".npy":
-        raise ValueError("invalid recorded frame path: %s" % relative)
-    frame_path = depth_path / relative
-    if frame_path.resolve().parent != (depth_path / "frames").resolve():
-        raise ValueError("recorded frame path leaves the frames directory: %s" % relative)
-    return frame_path
 
 
 def _selected_frames(depth_path, args):
     for sample in read_jsonl(depth_path / "frames.jsonl"):
         if args.frame_number is not None and sample["frame_number"] != args.frame_number:
             continue
-        yield sample, _frame_file(depth_path, sample)
+        yield sample, recorded_frame_path(depth_path, sample)
         if not args.all_frames:
             return
 
@@ -109,7 +100,11 @@ def _measure(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="g1 stairs", description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
+    calibrate = subparsers.add_parser("calibrate", help="calibrate a fixed camera pose from surveyed depth pixels")
+    calibration_points.configure_parser(calibrate)
+    calibrate.set_defaults(handler=calibration_points.run)
     measure = subparsers.add_parser("measure", help="write measured horizontal surfaces from saved frames")
+    measure.set_defaults(handler=_measure)
     measure.add_argument("--runs-dir", type=Path, default=Path("runs"))
     measure.add_argument("--run", required=True)
     measure.add_argument("--calibration", type=Path, help="default: depth/calibration.json in this run")
@@ -121,7 +116,7 @@ def main(argv=None):
     measure.add_argument("--min-samples", type=int, default=45)
     args = parser.parse_args(argv)
     try:
-        print(json.dumps(_measure(args), ensure_ascii=False, allow_nan=False, indent=2))
+        print(json.dumps(args.handler(args), ensure_ascii=False, allow_nan=False, indent=2))
     except (OSError, ValueError, KeyError) as error:
         print("geometry: %s" % error, file=sys.stderr)
         return 1

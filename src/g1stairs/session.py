@@ -19,6 +19,16 @@ def run_path(root, run_id):
     return Path(root) / run_id
 
 
+def recorded_frame_path(depth_path, sample):
+    relative = Path(sample["file"])
+    if len(relative.parts) != 2 or relative.parts[0] != "frames" or relative.suffix != ".npy":
+        raise ValueError("invalid recorded frame path: %s" % relative)
+    path = depth_path / relative
+    if path.resolve().parent != depth_path.resolve() / "frames":
+        raise ValueError("recorded frame path leaves the frames directory: %s" % relative)
+    return path
+
+
 def dump_line(handle, value):
     handle.write(json.dumps(value, ensure_ascii=False, allow_nan=False) + "\n")
 
