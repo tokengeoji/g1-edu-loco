@@ -50,14 +50,10 @@ RUN git init -q . && \
     git fetch --depth 1 https://github.com/unitreerobotics/unitree_ros2.git "$UNITREE_ROS2_REF" && \
     git checkout -q --detach FETCH_HEAD
 
-# Build Cyclone DDS before sourcing Foxy, then build the RMW and message
-# packages against this copy. Limit compiler parallelism on the Orin.
+# Keep the official Foxy RMW binary installed by apt. Its binary interface
+# works with 0.10.2, while the Foxy source expects older Cyclone headers.
 WORKDIR /opt/unitree_ros2/cyclonedds_ws
-ARG RMW_CYCLONEDDS_FOXY_REF=c12abc56983204f1d91f2d839d394528c7b29b42
 RUN set -ex; \
-    git init -q src/rmw_cyclonedds; \
-    git -C src/rmw_cyclonedds fetch --depth 1 https://github.com/ros2/rmw_cyclonedds.git "$RMW_CYCLONEDDS_FOXY_REF"; \
-    git -C src/rmw_cyclonedds checkout -q --detach FETCH_HEAD; \
     git clone --depth 1 --branch 0.10.2 https://github.com/eclipse-cyclonedds/cyclonedds.git src/cyclonedds; \
     export MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2; \
     colcon build --merge-install --executor sequential --packages-select cyclonedds \
@@ -65,9 +61,8 @@ RUN set -ex; \
     source /opt/ros/foxy/setup.bash; \
     source install/local_setup.bash; \
     colcon build --merge-install --executor sequential \
-      --packages-select rmw_cyclonedds_cpp unitree_go unitree_hg unitree_api \
-      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
-      -DCycloneDDS_DIR=/opt/unitree_ros2/cyclonedds_ws/install/lib/cmake/CycloneDDS; \
+      --packages-select unitree_go unitree_hg unitree_api \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF; \
     rm -rf build log
 
 # Use the same C++ SDK revision as the lab's working g1_health_monitor.
@@ -102,6 +97,7 @@ ENV ROS_DISTRO=foxy ROS_VERSION=2 ROS_PYTHON_VERSION=3 ROS_DOMAIN_ID=0 \
     PYTHONPATH=/opt/unitree_ros2/cyclonedds_ws/install/lib/python3.8/site-packages:/opt/ros/foxy/lib/python3.8/site-packages \
     PATH=/opt/unitree_ros2/cyclonedds_ws/install/bin:/opt/ros/foxy/bin:${PATH}
 
+COPY docker/tools/verify-foxy.py /opt/g1/verify-foxy.py
 RUN set -ex; \
     mkdir -p /opt/g1 /workspace; \
     printf '%s\n' \
@@ -110,6 +106,7 @@ RUN set -ex; \
       > /opt/g1/ros_env.sh; \
     printf '\nsource /opt/g1/ros_env.sh\n' >> /root/.bashrc; \
     python3 -c 'from importlib.metadata import version; import cv2, numpy, rclpy; from unitree_sdk2py.core.channel import ChannelSubscriber; from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_; assert version("cyclonedds") == "0.10.2"; assert rclpy.get_rmw_implementation_identifier() == "rmw_cyclonedds_cpp"'; \
+    python3 /opt/g1/verify-foxy.py; \
     ros2 interface show sensor_msgs/msg/Image >/dev/null; \
     ros2 pkg prefix unitree_hg
 
@@ -156,11 +153,13 @@ RUN set -e; chmod 0755 /usr/local/bin/g1 /usr/local/bin/g1-pc2-create-command; m
     for tool in rviz2 Xvfb xvfb-run xauth xwininfo x11vnc websockify; do command -v "$tool" >/dev/null; done; \
     python3 -c 'from importlib.metadata import version; from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient; assert version("pyrealsense2") == "2.54.1.5217"'; \
     g1 monitor --help >/dev/null; g1 teleop --help >/dev/null; \
-    g1 camera check --help >/dev/null; g1 stairs --help >/dev/null
+    g1 camera check --help >/dev/null; g1 camera start --help >/dev/null; \
+    g1 camera remote serve --help >/dev/null; g1 stairs --help >/dev/null
 
 # Exercise the real input-to-command logic with local test doubles during the build.
 RUN python3 -m unittest -q g1_teleop.test_control g1_teleop.test_preview g1_teleop.test_status \
-    g1_teleop.test_feedback g1_teleop.test_services g1stairs.camera.test_inspection
+    g1_teleop.test_feedback g1_teleop.test_services g1stairs.camera.test_inspection \
+    g1stairs.camera.test_publish g1stairs.camera.test_remote
 
 # Mark G1 operator shells so interactive commands are entered in the right place.
 RUN printf '%s\n' 'PS1="[jsj-g1-tools] \w\\$ "' >> /root/.bashrc

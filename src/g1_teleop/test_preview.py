@@ -108,6 +108,24 @@ class PreviewTests(unittest.TestCase):
         self.robot.GetFsmId.assert_called_once_with()
         self.connect.assert_not_called()
 
+    def test_straight_speed_from_cli_reaches_both_directions_and_arrows_without_physical_writes(self):
+        self.robot.GetFsmId.return_value = (0, 802)
+        args = self.args + ["--straight-speed", "0.30"]
+        self.assertEqual(self.keyboard(args, [b"\x1b[A", b"k", b"\x1b[B", b"k", b",", b"\x04"]), 0)
+        text = self.output.getvalue()
+        self.assertIn("직진·후진 고정 속도 ±0.300 m/s", text)
+        self.assertIn("SetVelocity(0.3, 0.0, 0.0,", text)
+        self.assertEqual(text.count("SetVelocity(-0.3, 0.0, 0.0,"), 2)
+        self.assertIn("종료 정지 · 속도 0 요청 수락", text)
+        self.robot.GetFsmId.assert_called_once_with()
+
+    def test_invalid_straight_speed_is_rejected_before_contacting_robot(self):
+        for value in ["0", "-0.2", "0.31", "nan", "inf"]:
+            with self.subTest(value=value), self.assertRaises(SystemExit):
+                cli.main(self.args + ["--straight-speed", value])
+        self.assertEqual(self.channel_events, [])
+        self.factory.assert_not_called()
+
     def test_terminal_error_during_motion_closes_only_the_local_controller(self):
         self.robot.GetFsmId.return_value = (0, 802)
         self.assertEqual(self.keyboard(self.args, [b"i", OSError("TTY disconnected")]), 1)

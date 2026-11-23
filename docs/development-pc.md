@@ -1,6 +1,8 @@
 <!-- Author: Codex (IIC) -->
 # G1 개발 PC에서 ROS 2 Foxy와 Cyclone DDS 사용하기
 
+Windows에서 Docker Desktop을 사용하는 경우에는 [Windows 개발 PC 설정](windows-development-pc.md)을 따른다. PC2 운영 컨테이너와 Windows 수신 컨테이너의 명령을 각각 수록했다.
+
 | 사용하려는 환경 | ROS 2를 준비할 위치 | 사용할 유선 NIC |
 | --- | --- | --- |
 | 외부 PC에서 SSH로 G1 조작 | PC2의 `jsj-g1-tools`에 이미 설치되어 있다. 외부 PC는 SSH 터미널만 연다. | 현장 로그에서 PC2는 `eth0`, `192.168.123.164/24` |
@@ -67,7 +69,7 @@ SSH로만 접속한다면 3절로 넘어간다. 아래는 유선 DDS를 직접 �
 )
 ```
 
-다음 블록은 처음 구성할 때 한 번 실행한다. Foxy용 RMW는 PC2와 같은 커밋을 사용한다. Cyclone DDS C 라이브러리를 먼저 빌드하고 Foxy를 불러온 뒤 RMW 및 G1 메시지를 빌드한다. [Unitree ROS 2 설치 순서](https://github.com/unitreerobotics/unitree_ros2#install-unitree-ros2-package) · [ROS 패키지 저장소 설정 파일](https://github.com/ros-infrastructure/ros-apt-source/releases/tag/1.3.0)
+다음 블록은 처음 구성할 때 한 번 실행한다. PC2와 같은 Foxy 배포 패키지의 RMW 플러그인을 사용한다. Cyclone DDS C 라이브러리를 먼저 빌드하고 Foxy를 불러온 뒤 G1 메시지를 빌드한다. Foxy RMW 0.7.11 소스는 Cyclone 0.10.2의 헤더로 컴파일되지 않는다. 배포 바이너리는 해당 런타임에서 영상·G1 상태의 송수신을 검증했다. [Unitree ROS 2 설치 순서](https://github.com/unitreerobotics/unitree_ros2#install-unitree-ros2-package) · [ROS 패키지 저장소 설정 파일](https://github.com/ros-infrastructure/ros-apt-source/releases/tag/1.3.0)
 
 **컨테이너 내부 · 외부 개발 PC · Cyclone DDS와 Unitree 메시지 설치**
 
@@ -82,16 +84,12 @@ SSH로만 접속한다면 3절로 넘어간다. 아래는 유선 DDS를 직접 �
   git checkout -q --detach FETCH_HEAD
   cd cyclonedds_ws
   git clone --depth 1 --branch 0.10.2 https://github.com/eclipse-cyclonedds/cyclonedds.git src/cyclonedds
-  git init -q src/rmw_cyclonedds
-  git -C src/rmw_cyclonedds fetch --depth 1 https://github.com/ros2/rmw_cyclonedds.git c12abc56983204f1d91f2d839d394528c7b29b42
-  git -C src/rmw_cyclonedds checkout -q --detach FETCH_HEAD
   colcon build --merge-install --executor sequential --packages-select cyclonedds \
     --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_TESTING=OFF
   source /opt/ros/foxy/setup.bash
   source install/local_setup.bash
-  colcon build --merge-install --executor sequential --packages-select rmw_cyclonedds_cpp unitree_hg unitree_go unitree_api \
-    --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
-    -DCycloneDDS_DIR="$PWD/install/lib/cmake/CycloneDDS"
+  colcon build --merge-install --executor sequential --packages-select unitree_hg unitree_go unitree_api \
+    --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 )
 ```
 
@@ -102,9 +100,10 @@ source /opt/ros/foxy/setup.bash
 source /opt/iic-unitree-ros2/cyclonedds_ws/install/local_setup.bash
 ros2 pkg prefix unitree_hg
 ros2 pkg prefix rmw_cyclonedds_cpp
+ldd /opt/ros/foxy/lib/librmw_cyclonedds_cpp.so | grep libddsc
 ```
 
-두 패키지의 경로가 모두 `/opt/iic-unitree-ros2/cyclonedds_ws/install`이면 개발 작업공간의 패키지를 사용 중이다. 여기까지가 표준 ROS 2와 Unitree 메시지 구독에 필요한 구성이다.
+`unitree_hg`의 경로는 `/opt/iic-unitree-ros2/cyclonedds_ws/install`, `rmw_cyclonedds_cpp`의 경로는 `/opt/ros/foxy`여야 한다. `ldd` 출력에서 `libddsc.so.0`의 대상이 개발 작업공간의 `install/lib`에 있는지도 확인한다. 여기까지가 표준 ROS 2와 Unitree 메시지 구독에 필요한 구성이다.
 
 ### 3. 유선 NIC, 도메인, 실제 수신 확인
 

@@ -1,0 +1,39 @@
+# Author: Codex (IIC)
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Head color1
+        - /Head color1/Topic1
+Visualization Manager:
+  Class: ""
+  Enabled: true
+  Displays:
+    - Class: rviz_default_plugins/Image
+      Name: Head color
+      Enabled: true
+      Normalize Range: true
+      Topic:
+        Value: /g1_remote/color/image_raw
+        History Policy: Keep Last
+        Depth: 2
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Name: Head depth
+      Enabled: true
+      Normalize Range: true
+      Topic:
+        Value: /g1_remote/depth/image_rect_raw
+        History Policy: Keep Last
+        Depth: 2
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Value: true
+  Global Options:
+    Fixed Frame: map
+    Frame Rate: 30
+  Tools: []
+  Value: true

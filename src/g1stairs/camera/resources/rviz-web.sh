@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Author: Codex (IIC project)
 # Runs inside xvfb-run. Xauthority, browser assets and VNC state are all local
-# to this container. Only the RViz window is exposed on the loopback interface.
+# to this container. The Windows bridge publishes noVNC on the Windows loopback.
 set -euo pipefail
 umask 077
 
+# A Desktop bridge needs a container-facing listener for Docker's localhost publish.
+web_bind=${G1_RVIZ_BIND:-127.0.0.1}
+case "$web_bind" in 127.0.0.1|0.0.0.0) ;; *) echo 'Invalid noVNC bind address.' >&2; exit 2 ;; esac
 port=${G1_RVIZ_PORT:-6080}
 [[ $port =~ ^[0-9]{1,5}$ ]] && ((10#$port >= 1024 && 10#$port <= 65535)) || {
   echo 'G1_RVIZ_PORT must be an integer between 1024 and 65535.' >&2
@@ -53,9 +56,9 @@ for ((attempt=0; attempt<200; attempt++)); do
 done
 [[ -n $rfb_port ]] || { echo 'Timed out waiting for the VNC listener.' >&2; exit 1; }
 
-websockify --web /usr/share/novnc "127.0.0.1:$port" "127.0.0.1:$rfb_port" &
+websockify --web /usr/share/novnc "$web_bind:$port" "127.0.0.1:$rfb_port" &
 children+=("$!")
-rviz2 -d /opt/g1-tools/g1stairs/camera/resources/image.rviz "$@" &
+rviz2 -d "${G1_RVIZ_CONFIG:-/opt/g1-tools/g1stairs/camera/resources/image.rviz}" "$@" &
 children+=("$!")
 
 # Wait for a mapped RViz window and the noVNC page before announcing the viewer.
@@ -84,6 +87,6 @@ PY
   exit 0
 fi
 
-printf '\nPC2 브라우저에서 열 RViz2 주소: http://127.0.0.1:%s/vnc.html?autoconnect=true&resize=scale\n' "$port"
+printf '\n브라우저에서 열 RViz2 주소: http://127.0.0.1:%s/vnc.html?autoconnect=true&resize=scale\n' "$port"
 printf '이번 세션의 VNC 암호: %s\n종료: Ctrl+C\n' "$(<"$state/password")"
 wait -n

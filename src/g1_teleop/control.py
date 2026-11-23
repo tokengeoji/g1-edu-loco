@@ -1,6 +1,7 @@
 # Author: Codex (IIC)
 """Keyboard commands for a G1 high-level LocoClient. All durations are in seconds."""
 
+import math
 import time
 
 
@@ -9,6 +10,8 @@ import time
 PULSE_SECONDS = 1.0
 REPEAT_INTERVAL = 0.1
 CONFIRM_SECONDS = 4.0
+# Existing maximum pure-x speed (0.15 m/s at 2×) and Unitree's example forward speed.
+MAX_STRAIGHT_SPEED = 0.30
 # ROS 2 teleop_twist_keyboard's planar keys. Axes: forward (m/s), left (m/s),
 # left turn (rad/s). G1 retains its existing, conservative starting velocities.
 VELOCITY = {
@@ -72,9 +75,13 @@ class EndSession(BaseException):
 class Controller:
     """Dispatch one fresh key at a time. Merely constructing this class sends nothing."""
 
-    def __init__(self, client, *, waist_3dof=False, run_fsm=LAB_RUN_FSM, clock=time.monotonic):
+    def __init__(self, client, *, waist_3dof=False, run_fsm=LAB_RUN_FSM, straight_speed=None,
+                 clock=time.monotonic):
         if type(run_fsm) is not int or run_fsm not in RUN_IDS:
             raise ValueError(f"지원하지 않는 Run FSM: {run_fsm}")
+        if straight_speed is not None and not 0 < straight_speed <= MAX_STRAIGHT_SPEED:
+            raise ValueError(f"--straight-speed는 0보다 크고 {MAX_STRAIGHT_SPEED:.2f} m/s 이하여야 합니다.")
+        self.straight_speed = straight_speed
         self.modes = {**MODES, "2": run_mode(run_fsm)}
         self.client = client
         self.waist_3dof = waist_3dof
@@ -132,8 +139,14 @@ class Controller:
             return f"RPC 오류: {error}. 속도 0 응답도 확인하지 못했습니다: {stop_error}. 조종기를 확인하세요."
         return f"RPC 오류: {error}. 직전 명령을 중단했습니다. 다음 입력에서 기체 상태를 다시 확인합니다."
 
+    def _speed_summary(self):
+        text = f"선속도 {self.linear_scale:g}배 · 회전 {self.turn_scale:g}배"
+        if self.straight_speed is not None:
+            text += f" · 직진·후진 고정 ±{self.straight_speed:.3f} m/s"
+        return text
+
     def _status(self, current):
-        text = f"현재 FSM={display_fsm(current)} · 선속도 {self.linear_scale:g}배 · 회전 {self.turn_scale:g}배"
+        text = f"현재 FSM={display_fsm(current)} · {self._speed_summary()}"
         if self._awaiting_fsm is not None:
             text += f" · 요청한 FSM {self._awaiting_fsm} 진입 미확인"
         return text
@@ -180,6 +193,8 @@ class Controller:
             return "이동 입력 시간이 만료되었습니다. 키를 다시 누르세요."
         vx, vy, yaw = VELOCITY[key]
         self._velocity = (vx * self.linear_scale, vy * self.linear_scale, yaw * self.turn_scale)
+        if self.straight_speed is not None and vy == 0 and yaw == 0:
+            self._velocity = (math.copysign(self.straight_speed, vx), 0.0, 0.0)
         self._input_count += 1
         if key == self._moving_key and now - self._last_move_sent < REPEAT_INTERVAL:
             self._motion_deadline = deadline
@@ -235,8 +250,7 @@ class Controller:
             turn = self.turn_scale + change
         self.linear_scale = min(2.0, max(0.5, linear))
         self.turn_scale = min(2.0, max(0.5, turn))
-        return (f"선속도 {self.linear_scale:g}배 · 회전 {self.turn_scale:g}배 · "
-                "다음 이동 입력부터 적용합니다.")
+        return self._speed_summary() + " · 다음 이동 입력부터 적용합니다."
 
     def handle(self, key, *, received_at=None, cancel_requested=None):
         """Dispatch a single operator event. Never renew a command from an expired input."""

@@ -12,7 +12,8 @@ import time
 import tty
 from contextlib import contextmanager, nullcontext
 
-from .control import CONFIRM_SECONDS, LAB_RUN_FSM, MODES, RUN_IDS, VELOCITY, Controller, EndSession, display_fsm
+from .control import (CONFIRM_SECONDS, LAB_RUN_FSM, MAX_STRAIGHT_SPEED, MODES, RUN_IDS,
+                      VELOCITY, Controller, EndSession, display_fsm)
 
 
 def mode_menu(modes):
@@ -301,6 +302,9 @@ def interact(controller, *, live=False):
         controller.exit_requested = True
 
     help_text = mode_menu(controller.modes) + KEY_HELP
+    if controller.straight_speed is not None:
+        help_text += (f"\n직진·후진 고정 속도 ±{controller.straight_speed:.3f} m/s · "
+                      "i/, 또는 ↑/↓ · 횡속도 0 · 회전속도 0")
     with keyboard_terminal(fd, request_exit):
         try:
             show(help_text, prefix)
@@ -355,11 +359,19 @@ def main(argv=None):
     parser.add_argument("--run-fsm", type=int, choices=RUN_IDS,
                         help="2번 키로 요청할 Run ID (기본: 시작 시 확인된 801/802, 그 외에는 연구실 802)")
     parser.add_argument("--waist-3dof", action="store_true", help="허리 3자유도 모델의 FSM 501 허용")
+    parser.add_argument("--straight-speed", type=float, metavar="M/S",
+                        help=f"직진·후진의 속도 크기만 고정 (0 초과~{MAX_STRAIGHT_SPEED:.2f} m/s). "
+                             "생략하면 기본 0.15 m/s에 키 배율 적용")
     args = parser.parse_args(argv)
     if (args.live or args.preview or args.status or args.feedback) and not args.interface:
         parser.error("--live / --preview / --status / --feedback 실행에는 --interface NIC가 필요합니다.")
     if args.domain < 0:
         parser.error("--domain은 0 이상의 정수여야 합니다.")
+    if args.straight_speed is not None:
+        if not 0 < args.straight_speed <= MAX_STRAIGHT_SPEED:
+            parser.error(f"--straight-speed는 0보다 크고 {MAX_STRAIGHT_SPEED:.2f} m/s 이하여야 합니다.")
+        if args.status or args.feedback:
+            parser.error("--straight-speed는 방향 키를 사용하는 모드에서만 적용됩니다.")
     if not (args.status or args.feedback) and not (sys.stdin.isatty() and sys.stdout.isatty()):
         parser.error("키보드 제어에는 대화형 TTY가 필요합니다. Docker에서는 -it를 사용하세요.")
     try:
@@ -396,7 +408,8 @@ def main(argv=None):
                 fsm = client.fsm
                 show(f"오프라인 모의 제어 · 초기 FSM={display_fsm(fsm)}")
             default_run = fsm if fsm in RUN_IDS else LAB_RUN_FSM
-            controller = Controller(client, waist_3dof=args.waist_3dof, run_fsm=args.run_fsm or default_run)
+            controller = Controller(client, waist_3dof=args.waist_3dof, run_fsm=args.run_fsm or default_run,
+                                    straight_speed=args.straight_speed)
             interact(controller, live=args.live)
     except EndSession:
         return 0

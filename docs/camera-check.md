@@ -29,6 +29,38 @@ g1 camera check --seconds 5
 | `usb_depth.status = DEVICE_NOT_VISIBLE` | 현재 컨테이너의 SDK에서 장치를 찾지 못했다. [USB 장치 확인 방법](../README.md#create)으로 PC2의 장치 목록과 컨테이너에 전달한 장치 경로를 비교한다. |
 | `DEVICE_BUSY` 또는 `DEPTH_PROFILE_UNSUPPORTED` | 점유한 프로그램이 제공하는 깊이 토픽을 확인한다. 프로필 오류라면 `g1 camera probe-usb`에서 장치가 지원하는 조합을 보고 `--width`, `--height`, `--fps`로 선택한다. |
 
+## USB에서 실시간 컬러·깊이 영상 켜기
+
+`check` 결과에서 이미 헤드 D435i의 ROS 2 영상을 받고 있으면 해당 토픽을 그대로 구독한다. 기본 D435i가 PC2의 USB 장치로 보이고 기존 프로그램이 점유하지 않은 경우에는 아래 명령으로 SDK 스트림과 ROS 2 발행을 함께 시작한다. 먼저 [USB 장치를 포함하는 컨테이너 생성 절차](../README.md#create)를 확인한다.
+
+**컨테이너 내부 · G1 PC2에서 카메라 켜기**
+
+```bash
+G1_CAMERA_IFACE=eth0 G1_CAMERA_DOMAIN=0 g1 camera start
+```
+
+기본값은 컬러와 깊이 각각 640×480, 30 fps다. 첫 프레임을 실제 발행하면 스트림 이름·크기·인코딩과 토픽을 출력한다. 터미널을 열어 두고 사용한 뒤 Ctrl+C로 카메라를 해제한다. 깊이만 보려면 `g1 camera start --stream depth`, 색상만 보려면 `--stream color`를 사용한다. 장치가 지원하는 조합에 맞춰 `--width`, `--height`, `--fps`를 지정할 수 있다. 선택한 스트림에서 5초 이상 새 프레임이 없으면 종료하고 해당 스트림을 알려 준다.
+
+| ROS 2 이미지 토픽 | 함께 발행하는 보정 정보 | 영상 의미 |
+| --- | --- | --- |
+| `/g1/head/color/image_raw` | `/g1/head/color/camera_info` | `bgr8`, 컬러 카메라 광학 좌표계 |
+| `/g1/head/depth/image_rect_raw` | `/g1/head/depth/camera_info` | `16UC1`, 깊이 카메라 광학 좌표계. 장치의 프레임별 SDK 단위를 읽어 밀리미터로 환산하며 0은 유효 거리 없음 |
+
+각 이미지와 해당 `CameraInfo`는 같은 촬영 시각과 광학 프레임을 사용한다. 색상과 깊이는 각각 고유한 카메라 좌표계에 있다. 센서 데이터 QoS는 Best Effort, Volatile이다. 카메라를 켜 둔 채 깊이 기록까지 하려면 별도 셸에서 ROS 토픽을 구독한다. USB 장치를 다시 열면 장치가 사용 중이라는 오류가 날 수 있다.
+
+**컨테이너 내부 · G1 PC2에서 발행 중인 깊이를 5초간 기록**
+
+```bash
+G1_CAMERA_IFACE=eth0 G1_CAMERA_DOMAIN=0 g1 camera record-ros \
+  --run "head-$(date +%Y%m%d-%H%M%S)" --seconds 5 \
+  --depth-topic /g1/head/depth/image_rect_raw --info-topic /g1/head/depth/camera_info \
+  --depth-scale-m 0.001
+```
+
+여기서 `0.001`은 이 발행기의 출력 1밀리미터를 미터로 바꾸는 값이다. 다른 발행기의 깊이 단위는 해당 드라이버에서 확인한다. [RealSense SDK 파이썬 예제](https://github.com/realsenseai/librealsense/tree/v2.54.1/wrappers/python/examples) · [RealSense ROS 보정 정보](https://github.com/realsenseai/realsense-ros/blob/960306819f45006ca3f903aa046bed32c509679a/realsense2_camera/src/base_realsense_node.cpp#L795) · [Windows 개발 PC에서 영상 보기](development-pc.md)
+
+## USB 깊이 미리보기
+
 **컨테이너 내부 · 실제 USB 깊이 화면 한 장 저장**
 
 ```bash

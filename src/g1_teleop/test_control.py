@@ -87,6 +87,22 @@ class ControllerTest(unittest.TestCase):
                 self.control.handle(key)
                 self.assertEqual(self.client.calls, [("read",), ("velocity", *vector, PULSE_SECONDS)])
 
+    def test_fixed_straight_speed_keeps_sign_and_ignores_scale_only_on_pure_x(self):
+        control = Controller(self.client, straight_speed=.20, clock=lambda: self.now)
+        self.assertEqual(self.client.calls, [])
+        control.handle("q")
+        for key, sign in (("i", 1), ("I", 1), (",", -1), ("<", -1)):
+            control.handle(key)
+            self.assertEqual(self.client.calls[-1], ("velocity", sign * .20, 0, 0, PULSE_SECONDS))
+            self.advance(.125)
+            control.tick()
+            self.assertEqual(self.client.calls[-1], ("velocity", sign * .20, 0, 0, .875))
+            control.handle("k")
+            self.assertEqual(self.client.calls[-1], ZERO)
+        control.handle("o")
+        self.assertAlmostEqual(self.client.calls[-1][1], .15 * 1.1)
+        self.assertAlmostEqual(self.client.calls[-1][3], -.30 * 1.1)
+
     def test_tap_refreshes_until_its_original_deadline_then_zeros_once(self):
         start = self.now
         self.control.handle("i")

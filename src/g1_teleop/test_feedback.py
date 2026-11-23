@@ -1,5 +1,6 @@
 # Author: Codex (IIC)
 import io
+import math
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -25,6 +26,30 @@ class OdometryFeedbackTests(unittest.TestCase):
         for velocity in [[], [float("nan"), 0., 0.]]:
             with self.assertRaises(ValueError):
                 format_odometry(SimpleNamespace(position=[0, 0], velocity=velocity, yaw_speed=0), None)
+
+    def test_signed_axes_use_initial_heading_for_forward_reverse_and_turning(self):
+        sample = SimpleNamespace(position=[3, 4, 0], velocity=[0, 0, 0], yaw_speed=0,
+                                 imu_state=SimpleNamespace(rpy=[0, 0, math.pi / 2]))
+        _, origin = format_odometry(sample, None)
+        sample.position = [3, 4.25, 0]
+        self.assertIn("전방 Δ=+0.250 m", format_odometry(sample, origin)[0])
+        sample.position = [2.9, 3.75, 0]
+        line, _ = format_odometry(sample, origin)
+        self.assertIn("전방 Δ=-0.250 m · 좌측 Δ=+0.100 m", line)
+        sample.imu_state.rpy[2] = -math.pi
+        turned, _ = format_odometry(sample, origin)
+        self.assertIn("전방 Δ=-0.250 m · 좌측 Δ=+0.100 m · 방위 변화=+90.0°", turned)
+
+    def test_missing_initial_heading_does_not_claim_a_direction(self):
+        sample = SimpleNamespace(position=[0, 0], velocity=[0, 0], yaw_speed=0,
+                                 imu_state=SimpleNamespace(rpy=[0, 0, float("nan")]))
+        _, origin = format_odometry(sample, None)
+        sample.imu_state.rpy[2] = 0.5
+        sample.position = [0, 1]
+        line, _ = format_odometry(sample, origin)
+        self.assertIn("시작점과 수평거리=1.000 m", line)
+        self.assertIn("전후/좌우 변위 미확인", line)
+        self.assertNotIn("전방 Δ=", line)
 
     def test_reader_uses_official_odom_type_and_does_not_reprint_stale_values(self):
         sample = SimpleNamespace(position=[0, 0, 0], velocity=[1, 0, 0], yaw_speed=0)

@@ -10,7 +10,7 @@ import numpy as np
 
 from g1stairs.session import create_part, dump_line, read_json, read_jsonl, run_path, write_json
 
-from . import inspection, realsense, ros_depth
+from . import inspection, publish, realsense, ros_depth
 
 
 def _metadata(source, clock):
@@ -143,8 +143,18 @@ def _positive(raw):
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["remote"]:
+        from . import remote
+        return remote.main(argv[1:])
     parser = argparse.ArgumentParser(prog="g1 camera", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("remote", help="stream ROS camera images over an SSH tunnel or view them on a development PC")
+    start = commands.add_parser("start", help="start the stock USB D435i and publish live ROS images and CameraInfo")
+    start.add_argument("--stream", choices=("both", "color", "depth"), default="both")
+    start.add_argument("--timeout-s", type=_positive, default=5.0,
+                       help="stop with a diagnostic if a selected stream sends no fresh frames")
+    start.set_defaults(action=publish.start)
     probe = commands.add_parser("probe", help="check for the G1's D435i and list its Z16 profiles")
     record = commands.add_parser("record", help="record D435i depth; G1 guide default: 640x480 at 60 Hz Z16")
     ros_record = commands.add_parser("record-ros", help="subscribe to existing D435i Depth and CameraInfo")
@@ -171,11 +181,11 @@ def main(argv=None):
     for command in (probe, record):
         command.add_argument("--source", choices=("realsense",), default="realsense")
     width, height, fps = realsense.G1_DEPTH_PROFILE
-    for command in (record, tty_usb, check):
+    for command in (start, record, tty_usb, check):
         command.add_argument("--device-index", type=_int_at_least(0))
         command.add_argument("--width", type=_int_at_least(1), default=width)
         command.add_argument("--height", type=_int_at_least(1), default=height)
-        command.add_argument("--fps", type=_int_at_least(1), default=fps)
+        command.add_argument("--fps", type=_int_at_least(1), default=30 if command is start else fps)
     for command in (record, ros_record):
         command.add_argument("--seconds", type=_positive, default=10.0)
         command.add_argument("--calibration", type=Path)
@@ -192,7 +202,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         result = args.action(args)
-        print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+        if result is not None:
+            print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
         if args.command == "check":
             usb = result["usb_depth"]
             if args.depth_preview is not None and "depth_preview" not in usb:

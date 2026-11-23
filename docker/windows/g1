@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Author: Codex (IIC)
+set -euo pipefail
+if [[ ${1:-} == camera && ${2:-} == connect ]]; then
+  if [[ $# != 3 || ! $3 =~ ^[[:alnum:]_][[:alnum:]_.-]*@[[:alnum:]][[:alnum:].-]*$ ]]; then
+    echo '사용법: g1 camera connect 사용자@PC2_주소' >&2
+    exit 2
+  fi
+  target=$3
+  state=$(mktemp -d /tmp/jsj-g1-ssh.XXXXXXXX)
+  tunnel_pid=''
+  close_tunnel() {
+    if [[ -n $tunnel_pid ]]; then
+      kill "$tunnel_pid" 2>/dev/null || :
+      wait "$tunnel_pid" 2>/dev/null || :
+    fi
+    rm -rf -- "$state"
+  }
+  trap close_tunnel EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  # LocalCommand runs after host authentication and successful local forwarding.
+  # Wait for OpenSSH's readiness without consuming one of the relay connections.
+  ssh -NT -o ExitOnForwardFailure=yes \
+    -o PermitLocalCommand=yes -o "LocalCommand=touch '$state/ready'" \
+    -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+    -L 127.0.0.1:8766:127.0.0.1:8766 -- "$target" &
+  tunnel_pid=$!
+  while [[ ! -f $state/ready ]]; do
+    if ! kill -0 "$tunnel_pid" 2>/dev/null; then
+      wait "$tunnel_pid" || exit $?
+      echo 'SSH terminated before setting up the camera forwarding port.' >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  python3 -m g1stairs.camera.remote receive
+  exit
+fi
+if [[ ${1:-} == camera && ${2:-} == remote ]]; then
+  shift 2
+  case ${1:-} in
+    receive|tty|--help|-h) exec python3 -m g1stairs.camera.remote "$@" ;;
+  esac
+fi
+if [[ ${1:-} == camera && ${2:-} == rviz ]]; then
+  shift 2
+  exec xvfb-run -a -s "-screen 0 1280x800x24 -nolisten tcp +extension GLX" \
+    bash /opt/g1-tools/g1stairs/camera/resources/rviz-web.sh "$@"
+fi
+printf '%s\n' 'Windows 개발 컨테이너' '  g1 camera connect 사용자@PC2_주소' '  g1 camera remote receive' \
+  '  g1 camera remote tty --topic /g1_remote/color/image_raw' '  g1 camera rviz'
+[[ ${1:-} == --help || ${1:-} == -h || $# == 0 ]]

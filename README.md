@@ -5,7 +5,7 @@ G1-EDU PC2에서 CPU 이미지 **`g1-jsj:base`**를 한 번 빌드하면 Ubuntu�
 
 **처음 키보드를 연결한다면 [로봇을 움직이기 전 텔레옵 점검](docs/teleop-preflight.md)을 따른다.** 실제 모터·보행 상태를 읽고 방향키와 정지를 모의 입력하는 현장 절차다.
 
-[개발 PC와 PC2의 ROS 2·Cyclone DDS 설정](docs/development-pc.md) · [이미지 빌드](#pc2) · [컨테이너 생성](#create) · [온도·텔레옵](#monitoring) · [카메라](#camera) · [계단 계산](#geometry) · [재개·기록 보관](#resume)
+[Windows Docker에서 G1 영상·상태 보기](docs/windows-development-pc.md) · [Linux 개발 PC와 PC2의 ROS 2·Cyclone DDS 설정](docs/development-pc.md) · [이미지 빌드](#pc2) · [컨테이너 생성](#create) · [온도·텔레옵](#monitoring) · [카메라](#camera) · [계단 계산](#geometry) · [재개·기록 보관](#resume)
 
 | 실행 위치 | 입력할 명령 |
 | --- | --- |
@@ -111,11 +111,19 @@ g1 teleop --live --interface eth0 --domain 0
 | `v` → `Enter` / `2` → `Enter` | 일반 보행(FSM 500) 요청 / 메뉴에 표시된 Run(801 또는 802) 요청 |
 | `f` / `?` | 현재 FSM 조회 / 전체 키 안내 |
 
-키 배치는 ROS 2 `teleop_twist_keyboard`를 따른다. 기체에는 Unitree 고수준 SDK의 `SetVelocity`를 보낸다. `i` 한 번의 기본 전진 속도는 0.15 m/s이며, 최대 1초의 입력 유효시간 안에서 같은 속도를 최대 10 Hz로 다시 전송한다. 키를 누르고 있으면 새 반복 입력이 유효시간을 연장한다. 별도 셸의 `g1 teleop --feedback --interface eth0 --domain 0`에서 기체가 추정한 이동 속력과 변위를 확인한다. `SetVelocity(7105) 수락`은 서비스 응답이며 실제 발걸음은 별도로 확인한다. 일반 보행을 선택하면 기체가 FSM 500을 보고한 뒤에만 새 이동 입력을 전송한다. 특히 예전 버전과 달리 **`w`는 선속도 증가, `m`은 후진 선회, `x`는 선속도 감소**다. [전체 배치와 무반응 진단](src/g1_teleop/README.md)
+키 배치는 ROS 2 `teleop_twist_keyboard`를 따른다. 기체에는 Unitree 고수준 SDK의 `SetVelocity`를 보낸다. `i` 한 번의 기본 전진 속도는 0.15 m/s이며, 최대 1초의 입력 유효시간 안에서 같은 속도를 최대 10 Hz로 다시 전송한다. 키를 누르고 있으면 새 반복 입력이 유효시간을 연장한다. 별도 셸의 `g1 teleop --feedback --interface eth0 --domain 0`에서 기체가 추정한 이동 속력과 변위를 확인한다. 11월 23일 실험에서는 ±0.15 m/s의 순수 직진·후진에서 전후 변위가 0이었다. `--straight-speed 0.30`은 순수 전후진에서만 크기를 바꿔 비교하는 옵션이다. 같은 시험 조건에서 기체가 실제로 걸었는지 시작 자세 기준의 부호 있는 변위와 현장 관찰로 확인한다. `SetVelocity(7105) 수락`은 서비스 응답이며 실제 발걸음은 별도로 확인한다. 일반 보행을 선택하면 기체가 FSM 500을 보고한 뒤에만 새 이동 입력을 전송한다. 특히 예전 버전과 달리 **`w`는 선속도 증가, `m`은 후진 선회, `x`는 선속도 감소**다. [전체 배치와 무반응 진단](src/g1_teleop/README.md)
 
 <a id="camera"></a>
 
 ## 카메라 토픽 확인과 깊이 기록
+
+머리 D435i가 PC2 컨테이너에 USB 장치로 전달됐다면 아래 명령으로 실제 컬러·깊이 영상을 발행한다. USB 장치를 여는 프로세스는 하나만 실행한다. 이미 ROS 드라이버에서 같은 카메라를 발행 중이면 해당 영상 토픽을 사용한다. [Windows Docker에서 TTY·RViz2로 보기](docs/windows-development-pc.md)
+
+**컨테이너 내부 · 카메라 켜기**
+
+```bash
+G1_CAMERA_IFACE=eth0 G1_CAMERA_DOMAIN=0 g1 camera start
+```
 
 현장에서는 `eth0`·도메인 0에서 전방 DDS 토픽 `rt/frontvideostream`의 발행자를 발견했고, 5초간 받은 유효 표본은 0개였다. 표준 ROS 영상, DDS 영상 바이트, USB 깊이 프레임을 한 번에 확인하려면 아래 명령을 사용한다. [결과 해석과 실제 깊이 영상 확인](docs/camera-check.md)
 
@@ -246,7 +254,7 @@ head -n 1 "/workspace/runs/$RUN_ID/geometry/stairs.jsonl"
 | [src/g1stairs/geometry](src/g1stairs/geometry/) | 공식 RealSense SDK의 역투영으로 미터 단위 3D 좌표를 구한 뒤, 프로젝트 알고리즘이 수평면과 관측된 경계를 찾아 계단 치수를 계산한다. [RealSense 좌표 변환](https://github.com/realsenseai/librealsense/wiki/Projection-in-RealSense-SDK-2.0) |
 | [config](config/) · [docker/base](docker/base/) · [docker/tools](docker/tools/) | 보정 형식, 전체 운영 이미지를 빌드하는 Dockerfile, CLI·USB 장치 선택 스크립트 |
 
-`g1-jsj:base`에는 공식 C++ SDK `aaf69cb`, Python SDK `814556d`, Unitree ROS 2 메시지 `668d1ec`, Foxy Cyclone RMW `c12abc5`와 Cyclone DDS `0.10.2`가 들어간다. 빌드할 때 RealSense Python SDK `2.54.1.5217`의 ARM64 배포 파일을 해시로 확인한다. [Unitree ROS 2](https://github.com/unitreerobotics/unitree_ros2/tree/668d1ec5a05d1c38d3306bdca7d59f2ba3581a88) · [Cyclone DDS](https://github.com/eclipse-cyclonedds/cyclonedds/tree/0.10.2)
+`g1-jsj:base`에는 공식 C++ SDK `aaf69cb`, Python SDK `814556d`, Unitree ROS 2 메시지 `668d1ec`, ROS 배포 패키지의 Foxy Cyclone RMW와 Cyclone DDS C 런타임 `0.10.2`가 들어간다. 빌드할 때 RealSense Python SDK `2.54.1.5217`의 ARM64 배포 파일을 해시로 확인한다. [Unitree ROS 2](https://github.com/unitreerobotics/unitree_ros2/tree/668d1ec5a05d1c38d3306bdca7d59f2ba3581a88) · [Cyclone DDS](https://github.com/eclipse-cyclonedds/cyclonedds/tree/0.10.2)
 
 PC2에서 이미지 설치 후 회귀 테스트는 아래 명령으로 실행한다. 테스트는 실제 보행 명령을 보내지 않는다. 물리 카메라 수신 여부와 계단 치수 정확도는 해당 기체의 프레임과 계단 실측으로 확인한다.
 
