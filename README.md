@@ -221,7 +221,9 @@ g1 monitor record --nic eth0 --domain 0 --run "$RUN_ID" --seconds 10
 
 <a id="geometry"></a>
 
-## 같은 기록으로 계단 높이·디딤면 깊이·폭 계산
+## 터미널에서 계단 높이·디딤면 깊이·폭 보기
+
+정지 자세의 실측 보정 파일이 있으면 USB 헤드 카메라에서 바로 단높이(cm)와 관측 평면도를 볼 수 있다. 이미 ROS 2로 깊이를 발행 중이면 같은 토픽에 연결한다. [USB·ROS 2 실시간 표시 명령](docs/stair-analysis.md#live)
 
 실험 디렉터리 `/workspace/runs/stairs-01/`의 `depth/`에 깊이, `state/`에 상태, `geometry/`에 계산 결과가 저장된다. 깊이 기록을 마친 터미널에서 같은 `RUN_ID`로 진행한다. 새 내부 셸을 열었다면 그 셸에서 `RUN_ID=stairs-01`을 실제 기록 이름으로 다시 설정한다.
 
@@ -247,7 +249,7 @@ with open(sys.argv[1], "x") as f:
 
 ```bash
 g1 stairs measure --run "$RUN_ID" --calibration "/workspace/runs/$RUN_ID/measured-calibration.json"
-head -n 1 "/workspace/runs/$RUN_ID/geometry/stairs.jsonl"
+g1 stairs view --run "$RUN_ID" --map
 ```
 
 기록 때 `--calibration`을 제공했다면 측정 단계에서 보정 인자를 생략할 수 있다. 기본은 첫 프레임이며 전체는 `--all-frames`다. `riser_height_m`은 인접 면의 단차, `tread_depth_m`은 디딤면의 앞뒤 깊이, `width_m`은 좌우 폭이다. 한쪽 경계만 보이면 해당 축의 치수는 `null`이다. `stair_flights`에서 연속으로 연결된 단과 단 경계 사이의 수평 간격을 확인한다. `g1 stairs assess`는 같은 프레임에서 발바닥 전체에 필요한 면적을 검사한다. 지지발 자세와 실측 도달 한계를 제공하면 후보까지의 높이·거리·방향도 검사한다. [실측 보정·치수 판독·발 디딤 후보 검사](docs/stair-analysis.md)

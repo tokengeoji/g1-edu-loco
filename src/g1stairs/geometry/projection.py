@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 import numpy as np
+from g1stairs.session import read_json
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,17 @@ class Calibration:
         if ground is not None and not np.isfinite(ground):
             raise ValueError("calibration ground_z_m must be finite")
         return cls(rotation, translation, frame_id, ground)
+
+
+def load_calibration(path, input_frame):
+    values = read_json(path)
+    if "frame_id" not in values and "target_frame" in values:
+        values["frame_id"] = values["target_frame"]
+    if "source_frame" in values:
+        source = values["source_frame"]
+        if not isinstance(source, str) or not source.strip() or source != input_frame:
+            raise ValueError(f"calibration source_frame {source!r} does not match depth frame {input_frame!r}")
+    return Calibration.from_mapping(values), values
 
 
 def _sdk_rays(width, height, intrinsics, model, coefficients):

@@ -179,6 +179,7 @@ def record(seconds, width, height, fps, device_index, write_frame, metadata):
                 raise CameraError("INVALID_DEPTH_SCALE: camera returned an invalid unit conversion")
             if depth_scale is None:
                 depth_scale = scale
+                metadata["depth_scale_m"] = scale
             elif not math.isclose(scale, depth_scale, rel_tol=1e-9):
                 raise CameraError("DEPTH_SCALE_CHANGED: one recording requires a consistent conversion")
             timestamp_ms = float(frame.get_timestamp())

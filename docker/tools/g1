@@ -6,6 +6,19 @@ set -euo pipefail
 cd /workspace
 command=${1:-help}
 if (($#)); then shift; fi
+configure_camera_network() {
+  # Camera transport may use a different domain/NIC from Unitree state/locomotion.
+  export ROS_DOMAIN_ID=${G1_CAMERA_DOMAIN:-${ROS_DOMAIN_ID:-0}}
+  [[ $ROS_DOMAIN_ID =~ ^[0-9]+$ ]] || { echo 'Invalid camera DDS domain' >&2; exit 2; }
+  if [[ -n ${G1_CAMERA_IFACE:-} ]]; then
+    if [[ ! $G1_CAMERA_IFACE =~ ^[[:alnum:]_.:-]+$ || ! -d /sys/class/net/$G1_CAMERA_IFACE ]]; then
+      echo "Unknown camera NIC: $G1_CAMERA_IFACE" >&2
+      exit 2
+    fi
+    export CYCLONEDDS_URI="<CycloneDDS><Domain><General><Interfaces><NetworkInterface name=\"$G1_CAMERA_IFACE\"/></Interfaces></General></Domain></CycloneDDS>"
+  fi
+}
+
 case "$command" in
   interfaces) exec ip -br -4 addr ;;
   health)
@@ -18,18 +31,12 @@ case "$command" in
     ;;
   monitor) exec python3 -m g1stairs.monitoring "$@" ;;
   teleop) exec python3 -m g1_teleop "$@" ;;
-  stairs) exec python3 -m g1stairs.geometry "$@" ;;
+  stairs)
+    if [[ ${1:-} == live ]]; then configure_camera_network; fi
+    exec python3 -m g1stairs.geometry "$@"
+    ;;
   camera)
-    # Camera transport may use a different domain/NIC from Unitree state/locomotion.
-    export ROS_DOMAIN_ID=${G1_CAMERA_DOMAIN:-${ROS_DOMAIN_ID:-0}}
-    [[ $ROS_DOMAIN_ID =~ ^[0-9]+$ ]] || { echo 'Invalid camera DDS domain' >&2; exit 2; }
-    if [[ -n ${G1_CAMERA_IFACE:-} ]]; then
-      if [[ ! $G1_CAMERA_IFACE =~ ^[[:alnum:]_.:-]+$ || ! -d /sys/class/net/$G1_CAMERA_IFACE ]]; then
-        echo "Unknown camera NIC: $G1_CAMERA_IFACE" >&2
-        exit 2
-      fi
-      export CYCLONEDDS_URI="<CycloneDDS><Domain><General><Interfaces><NetworkInterface name=\"$G1_CAMERA_IFACE\"/></Interfaces></General></Domain></CycloneDDS>"
-    fi
+    configure_camera_network
     case "${1:-}" in
       --help|-h|'')
         python3 -m g1stairs.camera --help
@@ -58,6 +65,8 @@ jsj-g1-tools 컨테이너 안에서 실행
   g1 teleop [options]                 ROS 2 키 배치(i 전진, k 정지). --preview 모의 조작, --live 실기체
   g1 camera COMMAND [options]         D435i 시작(start), 외부 TTY·RViz 연결(remote), 깊이 기록·재생
   g1 stairs calibrate [options]       기록한 깊이와 실측 기준점으로 고정 자세 보정
+  g1 stairs live [options]            헤드 깊이로 단높이(cm) 표시, --map으로 관측 평면도 표시
+  g1 stairs view [options]            저장된 측정 결과를 같은 터미널 표와 평면도로 확인
   g1 stairs measure [options]         /workspace/runs의 깊이 기록으로 계단 치수 계산
   g1 stairs assess [options]          측정된 면에서 발바닥 전체 지지와 선택한 도달 범위 검사
 HELP

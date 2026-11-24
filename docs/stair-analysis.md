@@ -3,6 +3,31 @@
 
 `g1 stairs measure`는 정지한 G1-EDU에서 기록한 깊이 영상으로 각 수평면의 높이, 단차, 디딤면 깊이와 폭을 미터 단위로 추정한다. `g1 stairs assess`는 같은 깊이 프레임에서 발을 놓을 수 있는 후보와 입력한 도달 조건을 검사한다. 두 명령 모두 저장된 파일만 읽어 계산한다.
 
+<a id="live"></a>
+
+## 터미널에서 지금 보이는 단높이와 평면도 확인
+
+카메라를 [실측 보정](#calibrate) 때와 같은 자세로 고정한다. 아래에서 `CAL`에 그때 만든 JSON의 실제 경로를 입력한다. USB로 카메라를 직접 열거나, 이미 실행 중인 ROS 2 깊이 발행기를 구독하는 방법 중 하나를 선택한다.
+
+**컨테이너 내부 · USB로 연결한 헤드 D435i에서 바로 표시**
+
+```bash
+read -rp '현재 USB 촬영 자세의 실측 보정 JSON 경로: ' CAL
+g1 stairs live --calibration "$CAL" --map
+```
+
+**컨테이너 내부 · 다른 셸에서 `g1 camera start --stream depth`로 이미 발행 중일 때**
+
+```bash
+read -rp '현재 ROS 광학 프레임과 촬영 자세의 실측 보정 JSON 경로: ' CAL
+G1_CAMERA_IFACE=eth0 G1_CAMERA_DOMAIN=0 g1 stairs live --source ros \
+  --depth-scale-m 0.001 --calibration "$CAL" --map
+```
+
+위 ROS 예시는 프로젝트 발행기의 `/g1/head/depth/image_rect_raw`와 `/g1/head/depth/camera_info`를 구독한다. 이 발행기는 깊이를 mm로 변환한다. 다른 발행기는 해당 깊이 영상과 CameraInfo를 `--depth-topic`, `--info-topic`으로 지정하고 발행자가 확인한 미터 환산값을 사용한다.
+
+기본 관측 시간은 10초다. `--seconds`로 기간을, `--interval`로 표시할 프레임 사이의 최소 시간(기본 1초)을 설정한다. Ctrl+C로 종료한다. 표의 **단높이**는 바로 앞 면과의 높이 차이이고 **바닥 기준 높이**는 보정 때 정한 바닥에서 잰 값이다. 확인할 수 없는 치수는 `--`로 표시한다. 면 ID는 한 프레임에서 관측한 수평면의 번호다. `--map`은 진행 방향을 위로 두고 관측한 바닥과 면을 표시한다. 실시간 표시는 깊이 파일을 저장하지 않는다. G1의 연속 등반 가능 여부는 미확인으로 표시한다.
+
 ## 1. 움직이지 않는 자세에서 깊이 기록하기
 
 기체와 카메라 자세를 고정한다. 정면에서 계단을 보고 첫 단 앞의 바닥, 단의 앞·뒤 모서리, 좌우 끝이 영상에 들어오도록 한다. 카메라를 움직여야 하면 별도 기록을 시작하고 해당 자세의 보정을 쓴다. 운영 컨테이너 준비와 USB 장치 선택은 [G1 호스트 설치 절차](../README.md#create)를 따른다.
@@ -105,12 +130,14 @@ g1 stairs calibrate --run "$RUN_ID" --frame-number "$FRAME" \
 
 ## 3. 치수 계산과 판독
 
-**컨테이너 내부 · 위 셸에서 첫 프레임 측정 후 전체 결과 읽기**
+**컨테이너 내부 · 위 셸에서 첫 프레임 측정 후 표와 평면도 표시**
 
 ```bash
 g1 stairs measure --run "$RUN_ID" --calibration "$CAL"
-head -n 1 "/workspace/runs/$RUN_ID/geometry/stairs.jsonl" | python3 -m json.tool
+g1 stairs view --run "$RUN_ID" --map
 ```
+
+이미 측정을 마쳤다면 `view`만 실행한다. `--map`을 생략하면 표만 표시한다. `view --frame-number N`으로 측정한 다른 프레임을 고를 수 있다.
 
 기록에 보정을 포함했다면 `--calibration "$CAL"`을 생략한다. 기본값은 첫 프레임이다. 특정 프레임은 `--frame-number N`에 `depth/frames.jsonl`의 `frame_number`를 넣고, 같은 자세의 모든 프레임을 각각 측정하려면 첫 실행 때 `--all-frames`를 추가한다. 기존 `geometry/`는 보존한다. 같은 깊이에 다른 설정을 비교할 때는 새 실험 디렉터리에 `depth/`를 복사한 뒤 새 `--run`을 지정한다. 프레임별 결과는 `geometry/stairs.jsonl`, 사용한 보정·옵션은 `geometry/manifest.json`에 저장된다.
 
