@@ -106,6 +106,10 @@ class Controller:
     def moving_key(self):
         return self._moving_key
 
+    @property
+    def active_input_deadline(self):
+        return self._motion_deadline if self._moving_key is not None else None
+
     @staticmethod
     def _check(operation, code):
         if type(code) is not int or code != 0:

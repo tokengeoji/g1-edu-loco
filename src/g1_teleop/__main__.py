@@ -140,6 +140,8 @@ class TerminalKeys:
     exit_key = "\x04"
     commands = b"kKqzwxecf?+-=!@#$ \r\n\x03\x04" + "".join((*VELOCITY, *MODES)).encode("ascii")
     arrows = {ord("A"): "i", ord("B"): ",", ord("C"): "l", ord("D"): "j"}
+    arrow_timeout = 0.15
+    arrow_prefixes = (b"\x1b", b"\x1b[", b"\x1bO")
 
     def __init__(self):
         self.state = "normal"
@@ -147,6 +149,36 @@ class TerminalKeys:
         self.arrow_started = 0.0
         self.clean_arrow = False
         self.mouse_bytes = 0
+
+    def read_from(self, fd, repeat_key, motion_deadline=None):
+        """Resolve a split arrow before dispatching its ESC byte as a stop."""
+        data = os.read(fd, 4096)
+        if self.state != "normal" or not data.startswith(b"\x1b"):
+            return self.read(data, repeat_key)
+        started = time.monotonic()
+        deadline = started + self.arrow_timeout
+        if motion_deadline is not None:
+            deadline = min(deadline, motion_deadline)
+        while True:
+            prefix = data
+            # A read can end halfway into the next copy of a held arrow.
+            if (repeat_key and len(data) > 3 and data[:2] in self.arrow_prefixes[1:]
+                    and self.arrows.get(data[2]) == repeat_key):
+                full, tail = divmod(len(data), 3)
+                if tail and data[:-tail] == data[:3] * full:
+                    prefix = data[-tail:]
+            if prefix not in self.arrow_prefixes:
+                return self.read(data, repeat_key)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([fd], [], [], remaining)[0] or time.monotonic() >= deadline:
+                self.read(prefix, repeat_key)  # Consume a late suffix without starting motion.
+                self.clean_arrow = False
+                self.arrow_started = started
+                return "\x1b"
+            fragment = os.read(fd, 4096)
+            if fragment in (b"", b"\x03", b"\x04", b"k", b"K", b" "):
+                return self.read(fragment, repeat_key)
+            data += fragment
 
     def read(self, data, repeat_key=None):
         if not data:
@@ -167,9 +199,10 @@ class TerminalKeys:
                 return repeat_key
             return "\x1b"
         now = time.monotonic()
-        if self.state == "esc" and len(data) == 1 and data[0] in self.commands:
-            if now - self.arrow_started > 0.15:
-                self.state = "normal"  # Independent key after a standalone Esc.
+        if self.state == "esc" and len(data) == 1 and data != b"O" and data[0] in self.commands:
+            if now - self.arrow_started > self.arrow_timeout:
+                self.state = "normal"  # Independent key after a standalone Esc; O can start an SS3 suffix.
+        stop = False
         for i, byte in enumerate(data):
             if self.state == "paste":
                 self.sequence = (self.sequence + bytes([byte]))[-6:]
@@ -210,7 +243,7 @@ class TerminalKeys:
             elif self.state in ("csi", "ss3"):
                 if 0x40 <= byte <= 0x7e:
                     if (byte in self.arrows and not self.sequence and self.clean_arrow
-                            and i == len(data) - 1 and now - self.arrow_started <= 0.15):
+                            and i == len(data) - 1 and now - self.arrow_started <= self.arrow_timeout):
                         self.state = "normal"
                         return self.arrows[byte]
                     if byte == ord("M") and self.state == "csi" and not self.sequence:
@@ -226,6 +259,12 @@ class TerminalKeys:
                     self.sequence = (self.sequence + bytes([byte]))[:4]
             elif len(data) == 1 and byte in self.commands:
                 return self.exit_key if byte in (3, 4) else chr(byte)
+            elif byte in (3, 4):
+                return self.exit_key
+            elif byte in b"kK ":
+                stop = True
+        if stop:
+            return " "
         return "\x1b"  # Cancel any pending mode when input is ambiguous.
 
 
@@ -252,15 +291,16 @@ def keyboard_terminal(fd, on_signal):
             sys.stdout.flush()
 
 
-def poll_queued(fd, keys, repeat_key, pending=None):
+def poll_queued(fd, keys, repeat_key, pending=None, motion_deadline=None):
     """Keep stops or one repeat of current motion, never a buffered direction change."""
     if pending == keys.exit_key:
         return pending
     if pending in VELOCITY and pending != repeat_key:
         pending = "\x1b"
     while select.select([fd], [], [], 0)[0]:
-        data = os.read(fd, 4096)
-        key = keys.read(data, repeat_key)
+        # Once a stop is queued, only consume bytes that are already available.
+        deadline = time.monotonic() if pending == " " else motion_deadline
+        key = keys.read_from(fd, repeat_key, deadline)
         if key == keys.exit_key:
             return key
         keys.clean_arrow = False  # A queued arrow prefix must stay stale.
@@ -291,7 +331,7 @@ def interact(controller, *, live=False):
     def cancel_requested():
         nonlocal pending
         # A repeat during GetFsmId may renew this direction. A stop takes priority.
-        pending = poll_queued(fd, keys, key, pending)
+        pending = poll_queued(fd, keys, key, pending, controller.active_input_deadline)
         return pending is not None and pending != key
 
     def request_exit(_signum, _frame):
@@ -318,13 +358,18 @@ def interact(controller, *, live=False):
                     if controller.exit_requested:
                         break
                     if message is not None:
-                        pending = poll_queued(fd, keys, controller.moving_key)
+                        pending = poll_queued(fd, keys, controller.moving_key,
+                                              motion_deadline=controller.active_input_deadline)
                         show(message, prefix)
                 if pending is None:
-                    if not select.select([fd], [], [], 0.05)[0]:
+                    wait = 0.05
+                    deadline = controller.active_input_deadline
+                    if deadline is not None:
+                        wait = max(0.0, min(wait, deadline - time.monotonic()))
+                    if not select.select([fd], [], [], wait)[0]:
                         continue
                     received_at = time.monotonic()
-                    pending = keys.read(os.read(fd, 4096), controller.moving_key)
+                    pending = keys.read_from(fd, controller.moving_key, deadline)
                 key, pending = pending, None
                 if key == keys.exit_key or controller.exit_requested:
                     break
@@ -333,7 +378,7 @@ def interact(controller, *, live=False):
                                             cancel_requested=cancel_requested)
                 if controller.exit_requested:
                     break
-                pending = poll_queued(fd, keys, controller.moving_key, pending)
+                pending = poll_queued(fd, keys, controller.moving_key, pending, controller.active_input_deadline)
                 received_at = started  # An input waiting after the RPC may be this old.
                 show(message, prefix)
                 if key == "?":

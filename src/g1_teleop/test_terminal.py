@@ -71,6 +71,37 @@ class KeyboardInputTests(unittest.TestCase):
         self.assertEqual(drain([b"i", b"k", b"ii"]), " ")
         self.assertEqual(drain([b"i", b" ", b"\x04"]), cli.TerminalKeys.exit_key)
 
+    def test_split_arrows_coalesce_repeats_and_honor_stops(self):
+        for chunks, expected in [
+            ([b"\x1b[A\x1b[", b"A"], "i"),
+            ([b"\x1bO", b"C"], "l"),
+            ([b"\x1b[", b"k"], "k"),
+            ([b"\x1b", b"\x04"], cli.TerminalKeys.exit_key),
+            ([b"\x1b[Ai "], " "),
+            ([b"\x1b[Aik\x04"], cli.TerminalKeys.exit_key),
+        ]:
+            with self.subTest(chunks=chunks), patch.object(cli.os, "read", side_effect=chunks), \
+                    patch.object(cli.select, "select", return_value=([91], [], [])):
+                self.assertEqual(cli.TerminalKeys().read_from(91, "i"), expected)
+
+    def test_arrow_assembly_cannot_extend_the_motion_deadline(self):
+        keys = cli.TerminalKeys()
+        with patch.object(cli.os, "read", return_value=b"\x1b["), \
+                patch.object(cli.time, "monotonic", return_value=100.0), \
+                patch.object(cli.select, "select", return_value=([], [], [])) as wait:
+            self.assertEqual(keys.read_from(91, "i", motion_deadline=100.005), "\x1b")
+            self.assertAlmostEqual(wait.call_args.args[-1], .005)
+        self.assertEqual(keys.read(b"B"), "\x1b")
+
+    def test_late_ss3_tail_after_escape_cannot_become_sideways_motion(self):
+        keys = cli.TerminalKeys()
+        with patch.object(cli.os, "read", return_value=b"\x1b"), \
+                patch.object(cli.select, "select", return_value=([], [], [])):
+            self.assertEqual(keys.read_from(91, "i"), "\x1b")
+        with patch.object(cli.time, "monotonic", return_value=keys.arrow_started + 1):
+            self.assertEqual(keys.read(b"O"), "\x1b")
+            self.assertEqual(keys.read(b"B"), "\x1b")
+
 
 class DiscoveryTests(unittest.TestCase):
     @patch.object(cli.time, "sleep")
@@ -249,6 +280,35 @@ class TerminalLoopTests(unittest.TestCase):
         self.await_output("이동 입력 2회 · 속도 RPC 수락 2회")
         os.write(self.master, b"\x04")
         self.assert_restored()
+
+    def test_split_repeat_does_not_stop_and_standalone_escape_still_stops(self):
+        self.start()
+        os.write(self.master, b"\x1b[A")
+        self.await_output("[모의] Move(0.3, 0.0, 0.0)")
+        time.sleep(.18)  # Outside the rate limit, inside the input lease.
+        os.write(self.master, b"\x1b")
+        time.sleep(.02)
+        os.write(self.master, b"[")
+        time.sleep(.02)
+        os.write(self.master, b"A")
+        repeated = self.await_output("[모의] Move(0.3, 0.0, 0.0)")
+        self.assertNotIn(b"StopMove()", repeated)
+        os.write(self.master, b"\x1b")
+        self.await_output("[모의] StopMove()", timeout=.6)
+        os.write(self.master, b"\x04")
+        self.assert_restored()
+
+    def test_queued_split_reverse_during_rpc_cannot_restart_motion(self):
+        self.start_live_spy(delay="initial")
+        os.write(self.master, b"i")
+        self.await_output("waiting for key during FSM read")
+        os.write(self.master, b"\x1bO")
+        time.sleep(.025)
+        os.write(self.master, b"B")
+        time.sleep(.05)
+        os.write(self.master, b"\x04")
+        self.assert_restored()
+        self.assertEqual(self.velocities.read_text().splitlines(), ["zero"])
 
     def test_mode_request_and_speed_cap_are_separate_from_motion(self):
         self.start(f"""
