@@ -7,7 +7,7 @@ G1-EDU PC2에서 CPU 이미지 **`g1-jsj:base`**를 한 번 빌드하면 Ubuntu�
 
 | 현장에서 확인할 것 | 바로 가기 |
 | --- | --- |
-| FSM 802에서 어떤 입력이 실제 보행으로 이어졌는지, 첫발과 카메라 깊이에서 무엇이 미확인인지 | [2026-11-23 실험 결과와 코드 이력](docs/teleop-802-evidence.md) |
+| 키보드 정면 출발에 성공한 모드와 다음 실험 | [11월 26일 501·802 비교와 재시험 항목](docs/teleop-802-501-comparison.md) · [11월 23일 802 관절·오도메트리 기록](docs/teleop-802-evidence.md) |
 | 모터 명령 전 키 배치·정지 확인, FSM 802에서 전진·후진이 안 됐던 이유와 비교 시험 | [보행 전 점검](docs/teleop-preflight.md) · [전후진 명령과 실제 변위 기록](src/g1_teleop/README.md#no-motion) |
 | 머리 D435i 켜기, Windows에서 컬러·깊이를 TTY 또는 RViz2로 확인 | [카메라 수신 검사](docs/camera-check.md) · [Windows Docker 설정](docs/windows-development-pc.md) |
 | 계단 촬영·보정·치수 계산, 발바닥을 놓을 수 있는 위치와 도달 범위 | [측정 명령과 발 디딤 후보 판정](docs/stair-analysis.md) |
@@ -121,7 +121,7 @@ g1 teleop --live --interface eth0 --domain 0
 
 실기체에서는 공식 C++ SDK가 지정한 `sport` 서비스로 요청을 보낸다. 기본 배율에서 `i` 한 번은 Unitree 공식 Python 예제와 같은 `Move(0.3, 0, 0)`, `,`는 `Move(-0.3, 0, 0)`을 요청한다. 추가 속도 옵션은 필요 없다. 순수 전후진은 배율을 낮춰 줄일 수 있고 상한은 0.30 m/s다. `--straight-speed`를 명시하면 해당 값으로 고정된다. 각 이동 요청은 전송 시점부터 1초간 유효하며 같은 키의 새 반복 입력은 최대 10 Hz로 전송한다. 마지막 입력에서 1초가 지나거나 `k`를 누르면 `StopMove()`를 호출한다. 이전 타이머 재전송 방식은 `--timed-velocity`로 선택한다. [공식 전진 예제](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/example/g1/high_level/g1_loco_client_example.py#L92-L97)
 
-11월 23일에 기록한 두 시험에서는 FSM 802의 순수 전후진 ±0.15 m/s에서 발걸음이 관측되지 않았다. `g1 teleop --feedback --interface eth0 --domain 0`의 시작 전방 변위와 현장 발걸음으로 실제 이동을 확인한다. 일반 보행을 선택한 경우에는 FSM 500 확인 뒤 다음 이동 키가 전송된다. ROS 2 키 배치에서 `w`는 선속도 증가, `m`은 후진 선회, `x`는 선속도 감소다. [키 배치와 이후 전진 관찰](src/g1_teleop/README.md#no-motion)
+11월 26일에는 FSM 501에서 양발을 나란히 둔 채 키보드로 정면 출발하는 모습을 운영자가 확인했다. 같은 기체의 802에서는 같은 발 배치에서 첫발이 불안정했다. 11월 23일의 802 순수 전후진 ±0.15 m/s 시험에서도 발걸음이 관측되지 않았다. 다음 시험에서 `g1 teleop --feedback --interface eth0 --domain 0`의 부호 있는 전후 변위와 육안으로 본 첫발을 함께 기록한다. 일반 보행을 선택한 경우에는 FSM 500 확인 뒤 다음 이동 키가 전송된다. ROS 2 키 배치에서 `w`는 선속도 증가, `m`은 후진 선회, `x`는 선속도 감소다. [501·802 결과와 다음 실험](docs/teleop-802-501-comparison.md) · [키 배치](src/g1_teleop/README.md#no-motion)
 
 <a id="camera"></a>
 
