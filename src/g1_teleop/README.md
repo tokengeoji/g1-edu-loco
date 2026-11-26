@@ -74,7 +74,7 @@ python3 -m unittest g1_teleop.test_control g1_teleop.test_terminal g1_teleop.tes
 g1 teleop --live --interface eth0 --domain 0
 ```
 
-시작 화면의 `[실기체]` 표시를 확인한다. 일반 보행을 선택하려면 기체의 전환 조건을 확인한 뒤 `v`와 `Enter`로 FSM 500을 요청한다. `f`에서 500이 확인되면 다음 방향 키부터 속도를 요청할 수 있다. Run 모드는 `2`와 `Enter`로 요청한다. `k` 또는 스페이스로 속도 0을 요청한다.
+시작 화면의 `[실기체]` 표시와 현재 FSM을 확인한다. 허리 3자유도 보행을 선택하려면 `8`을 누른다. 허리 3축 모델이고, 허리 고정구가 제거됐으며 Explore 앱에서 허리 모터 잠금이 해제된 것을 확인한 뒤 4초 안에 `Enter`를 누른다. `f`에 실제 FSM **501**이 표시되고 기체가 안정적으로 서 있으면 이동 키를 사용한다. 일반 보행(500)은 `v` → `Enter`, Run은 `2` → `Enter`로 요청한다. `k` 또는 스페이스로 속도 0을 요청한다.
 
 ## 실기체에서 호출하는 공식 함수
 
@@ -126,7 +126,7 @@ SDK 기본 설정에서 세 인자의 `Move`는 유효시간 1초로 `SetVelocit
 | --- | --- |
 | `v` | 일반 보행(Walk Motion). 고정 버전의 SDK `Start()`와 같은 `SetFsmId(500)`을 호출해 반환 코드를 검사한다. [Unitree SDK](https://github.com/unitreerobotics/unitree_sdk2/blob/aaf69cb56c9d5ed63d8b284008ec3a8ab999bec1/include/unitree/robot/g1/loco/g1_loco_client.hpp#L214-L222) |
 | `2` | Run 모드. 시작 시 801 또는 802를 관측하면 해당 ID를 사용하고, 다른 상태에서 시작하면 연구실에서 관측한 802를 기본값으로 사용한다. 기체의 Run ID를 알고 있으면 `--run-fsm 801` 또는 `--run-fsm 802`로 2번 키의 대상을 지정할 수 있다. |
-| `8` | 허리 3자유도 보행(501). 해당 모델을 확인하고 실행 옵션 `--waist-3dof`를 지정한 경우 |
+| `8` | 허리 3자유도 보행(501). 허리 고정구 제거와 Explore 앱 잠금 해제를 확인한 뒤 전환을 요청한다. `f`로 실제 FSM을 조회한다. |
 | `1` / `3` | 잠금 기립(4) / 위치 제어 쪼그림(2). 균형 제어가 없어 기체 지지 필요 |
 | `6` | 균형 쪼그림과 기립 간 전환(706). 전환 후 현재 자세를 직접 확인 |
 | `7` 또는 `9` | 의자에 앉기(3). 의자 위치와 기체 지지 확인 |
@@ -229,4 +229,4 @@ g1 monitor probe --nic eth0 --domain 0 | grep -oE '"mode_machine": *[0-9]+'
 
 `GetFsmId`는 선택된 FSM, `GetFsmMode`는 제어기가 보고한 정적(0)·동적(1) 상태다. `GetServerApiVersion`은 서비스 API 버전이며 기체 소프트웨어 버전은 Unitree 앱에서 확인한다. 속도 요청 수락과 정적·동적 값만으로 실제 변위를 판정할 수 없다. 필요한 경우 [상태 모니터](../g1stairs/monitoring/README.md)에서 실험 중 관절 `q/dq`를 기록해 현장 관찰과 대조한다.
 
-FSM 501은 허리 3자유도 보행용이다. 연구실 Drive의 사용자 매뉴얼 43~45쪽에 따르면 허리 3자유도 사용 조건은 허리 고정구가 제거되어 있고 Explore 앱의 허리 모터가 잠금 해제된 상태다. 텔레옵은 이 구성을 확인한 조작자가 `--waist-3dof`를 지정한 경우에만 501을 허용한다. [G1 사용자 매뉴얼 v1.5.3](https://drive.google.com/file/d/1a3YB1D-TMrGSOSjBVLqAeOhfV7_v-GpH/view) · [Unitree 보행 서비스](https://support.unitree.com/home/en/G1_developer/sport_services_interface)
+FSM 501은 허리 3자유도 보행용이다. 연구실 Drive의 사용자 매뉴얼 43~45쪽에 따르면 허리 3자유도 사용 조건은 허리 고정구가 제거되어 있고 Explore 앱의 허리 모터가 잠금 해제된 상태다. 같은 실행 명령에서 `8` → `Enter`로 501을 선택한다. 이전 실행 명령의 `--waist-3dof`도 호환된다. 이 옵션의 유무는 802의 속도 명령이나 허리 잠금 설정에 영향을 주지 않는다. [G1 사용자 매뉴얼 v1.5.3](https://drive.google.com/file/d/1a3YB1D-TMrGSOSjBVLqAeOhfV7_v-GpH/view) · [Unitree 보행 서비스](https://support.unitree.com/home/en/G1_developer/sport_services_interface)

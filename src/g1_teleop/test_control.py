@@ -403,6 +403,19 @@ class ControllerTest(unittest.TestCase):
         self.control.handle("i")
         self.assertEqual(self.client.calls[-1], ("read",))
 
+    def test_slow_confirmation_read_honors_cancellation_and_selection_expiry(self):
+        for key, state in (("0", 802), ("4", 500), ("8", 802)):
+            for cancelled in (False, True):
+                with self.subTest(key=key, cancelled=cancelled):
+                    self.client.calls.clear()
+                    self.client.state = state
+                    self.client.on_read = lambda: self.advance(.1 if cancelled else CONFIRM_SECONDS)
+                    self.control.handle(key)
+                    result = self.control.handle("\r", cancel_requested=lambda: cancelled)
+                    self.assertIn("취소" if cancelled else "시간이 지났", result)
+                    self.control.handle("\r")
+                    self.assertEqual(self.client.calls, [("read",)])
+
     def test_802_transition_requires_readback_and_never_falls_back_to_500(self):
         self.client.state = 500
         self.assertIn("진입 미확인", self.request("2"))
@@ -534,7 +547,6 @@ class ControllerTest(unittest.TestCase):
         self.assertIsNone(self.control.tick())
 
     def test_refresh_stops_if_the_gait_changes_even_between_enabled_gaits(self):
-        self.control = Controller(self.client, waist_3dof=True, clock=lambda: self.now)
         self.control.handle("i")
         self.client.state = 501
         self.advance(.2)
@@ -563,22 +575,25 @@ class ControllerTest(unittest.TestCase):
             self.control.tick()
             self.assertEqual(self.client.calls, [])
 
-    def test_waist_model_gate_for_request_movement_and_balance(self):
-        self.request("8")
+    def test_waist_gait_selection_requires_confirmation_and_readback(self):
+        prompt = self.control.handle("8")
+        self.assertIn("허리 고정구 제거", prompt)
+        self.assertIn("Explore 앱 허리 모터 잠금 해제", prompt)
         self.assertEqual(self.client.calls, [])
-        self.client.state = 501
+        self.assertIn("FSM 501 진입 미확인", self.control.handle("\r"))
+        self.assertEqual(self.client.calls, [("read",), ("fsm", 501), ("read",)])
         self.control.handle("i")
-        self.request("5")
-        self.assertEqual(self.client.calls, [("read",), ("read",)])
-        self.control = Controller(self.client, waist_3dof=True, clock=lambda: self.now)
-        self.client.state = 4
-        self.request("8")
+        self.assertEqual(self.client.wrapper_calls, [])
         self.client.state = 501
+        self.assertIn("FSM=501", self.control.handle("i"))
+        self.assertEqual(self.client.wrapper_calls, [("Move", .30, 0, 0)])
+
+    def test_waist_gait_already_active_needs_no_switch_or_flag(self):
+        self.client.state = 501
+        self.request("8")
+        self.assertEqual(self.client.calls, [("read",)])
         self.control.handle(",")
-        self.assertIn(("fsm", 501), self.client.calls)
-        self.assertEqual(self.client.calls[-1], ("velocity", -.30, 0, 0, PULSE_SECONDS))
-        self.client.state = 802
-        self.assertNotIn("→ Enter", self.control.handle("i"))
+        self.assertEqual(self.client.wrapper_calls, [("Move", -.30, 0, 0)])
 
     def test_mode_requests_use_sdk_codes(self):
         self.client.state = 500

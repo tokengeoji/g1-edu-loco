@@ -237,13 +237,27 @@ class TerminalLoopTests(unittest.TestCase):
                         "5 연속 제자리걸음 (균형 설정 1)", "6 균형 쪼그림 ↔ 기립 전환 (FSM 706)",
                         "7/9 의자에 앉기 (FSM 3)", "8 허리 3자유도 보행 (FSM 501)", "v 일반 보행 (FSM 500)"):
             self.assertIn(binding, startup)
-        self.assertIn("--waist-3dof", startup)
+        self.assertIn("허리 고정구 제거 및 Explore 앱 허리 모터 잠금 해제 확인", startup)
         self.assertIn("← / → = 소문자 j / l · 제자리 회전 요청 (vx=vy=0)", startup)
         self.assertIn("대문자 J / L (Shift+j / Shift+l) · 왼쪽 / 오른쪽 옆걸음 요청 (vx=yaw=0)", startup)
         self.assertIn("직진·후진 ±0.300 m/s (상한 0.300 m/s)", startup)
         self.assertIn("Ctrl+C 정지 요청 후 종료", startup)
         os.write(self.master, b"\x04")
         self.assert_restored()
+
+    def test_select_501_with_default_cli_or_legacy_waist_flag(self):
+        for args in (["--dry-run"], ["--dry-run", "--waist-3dof"]):
+            with self.subTest(args=args):
+                self.start(f"from {__package__}.__main__ import main; raise SystemExit(main({args!r}))")
+                os.write(self.master, b"8")
+                self.await_output("Enter로 요청")
+                os.write(self.master, b"\r")
+                self.await_output("[모의] SetFsmId(501)")
+                self.await_output("현재 FSM=501")
+                os.write(self.master, b"i")
+                self.await_output("[모의] Move(0.3, 0.0, 0.0)")
+                os.write(self.master, b"\x04")
+                self.assert_restored()
 
     def test_one_arrow_sends_one_move_then_idle_stop_and_eof_restores_terminal(self):
         self.start()

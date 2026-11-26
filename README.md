@@ -116,6 +116,7 @@ g1 teleop --live --interface eth0 --domain 0
 | `k` 또는 스페이스 / `Ctrl+C` | 속도 0 요청 후 조작 계속 / 속도 0 요청의 결과를 표시하고 종료 |
 | `q` / `z` | 다음 이동의 선속도·회전속도 10% 증가 / 감소 |
 | `v` → `Enter` / `2` → `Enter` | 일반 보행(FSM 500) 요청 / 메뉴에 표시된 Run(801 또는 802) 요청 |
+| `8` → `Enter` → `f` | 허리 3자유도 보행(501) 선택과 실제 FSM 확인. 허리 3축 모델이며 고정구가 제거되고 Explore 앱의 허리 잠금이 해제된 상태에서 선택 |
 | `f` / `?` | 현재 FSM 조회 / 전체 키 안내 |
 
 실기체에서는 공식 C++ SDK가 지정한 `sport` 서비스로 요청을 보낸다. 기본 배율에서 `i` 한 번은 Unitree 공식 Python 예제와 같은 `Move(0.3, 0, 0)`, `,`는 `Move(-0.3, 0, 0)`을 요청한다. 추가 속도 옵션은 필요 없다. 순수 전후진은 배율을 낮춰 줄일 수 있고 상한은 0.30 m/s다. `--straight-speed`를 명시하면 해당 값으로 고정된다. 각 이동 요청은 전송 시점부터 1초간 유효하며 같은 키의 새 반복 입력은 최대 10 Hz로 전송한다. 마지막 입력에서 1초가 지나거나 `k`를 누르면 `StopMove()`를 호출한다. 이전 타이머 재전송 방식은 `--timed-velocity`로 선택한다. [공식 전진 예제](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/example/g1/high_level/g1_loco_client_example.py#L92-L97)

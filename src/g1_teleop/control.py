@@ -37,6 +37,7 @@ def run_mode(fsm):
 
 # An explicit Enter confirms the selected request. Never interpret an arbitrary
 # integer or a repeated key as an FSM command.
+WAIST_CONFIGURATION = "허리 고정구 제거 및 Explore 앱 허리 모터 잠금 해제 확인"
 MODES = {
     "1": ("fsm", 4, "잠금 기립 · 균형 제어 없음 · 기체 지지 확인"),
     "2": run_mode(LAB_RUN_FSM),
@@ -45,7 +46,7 @@ MODES = {
     "5": ("balance", 1, "연속 제자리걸음 · 속도 0에서도 발 디딤"),
     "6": ("fsm", 706, "균형 쪼그림 ↔ 기립 전환 · 현재 자세 확인"),
     "7": ("fsm", 3, "의자에 앉기 · 의자 위치와 기체 지지 확인"),
-    "8": ("fsm", 501, "허리 3자유도 보행"),
+    "8": ("fsm", 501, f"허리 3자유도 보행 · {WAIST_CONFIGURATION}"),
     "9": ("fsm", 3, "의자에 앉기 · 의자 위치와 기체 지지 확인"),
     "v": ("fsm", 500, "일반 보행 · Unitree SDK Start의 FSM 500"),
     "0": ("fsm", 1, "댐핑 · 균형 제어가 해제되므로 기체 지지 확인"),
@@ -75,6 +76,7 @@ class EndSession(BaseException):
 class Controller:
     """Dispatch one fresh key at a time. Merely constructing this class sends nothing."""
 
+    # Keep the waist_3dof keyword for older callers.
     def __init__(self, client, *, waist_3dof=False, run_fsm=LAB_RUN_FSM, straight_speed=None,
                  timed_velocity=False, clock=time.monotonic):
         if type(run_fsm) is not int or run_fsm not in RUN_IDS:
@@ -85,7 +87,6 @@ class Controller:
         self.timed_velocity = timed_velocity
         self.modes = {**MODES, "2": run_mode(run_fsm)}
         self.client = client
-        self.waist_3dof = waist_3dof
         self.clock = clock
         self.linear_scale = self.turn_scale = 1.0
         self.exit_requested = False
@@ -172,15 +173,18 @@ class Controller:
     def _check_mode(self, current, allowed_modes, hint):
         if self._awaiting_fsm is not None:
             return self._status(current)
-        if current == 501 and not self.waist_3dof:
-            return "FSM 501입니다. 허리 3자유도 모델 확인 후 --waist-3dof로 실행하세요."
         if current not in allowed_modes:
             return f"현재 FSM={current}. {hint}"
         return None
 
-    def _confirm(self, selected):
+    def _confirm(self, selected, cancel_requested):
         kind, value, label = self.modes[selected]
         current = self._fsm()
+        # GetFsmId can block while the operator presses stop or the selection expires.
+        if cancel_requested is not None and cancel_requested():
+            return "모드 선택을 취소했습니다."
+        if self.clock() >= self._confirm_deadline:
+            return "모드 선택 시간이 지났습니다."
         if current == 1000:
             return "FSM 1000(사용자 제어)입니다. 내장 보행기 명령을 전송하지 않았습니다."
         if kind == "balance":
@@ -227,8 +231,9 @@ class Controller:
 
     def _update_motion(self, key, deadline, *, velocity=None, cancel_requested=None):
         current = self._fsm()
-        walk_option = "허리 3자유도 보행(501)은 8 → Enter" if self.waist_3dof else "일반 보행(500)은 v → Enter"
-        blocked = self._check_mode(current, GAIT_IDS, f"{walk_option}, Run은 메뉴의 ID를 확인하고 2 → Enter로 선택하세요.")
+        blocked = self._check_mode(current, GAIT_IDS,
+                                   "보행 모드를 선택하세요. 일반 보행(500)은 v, 허리 3자유도 보행(501)은 8, "
+                                   "Run은 메뉴의 ID를 확인하고 2를 누른 뒤 Enter로 확인하세요.")
         if blocked:
             self._stop()
             return blocked
@@ -298,7 +303,7 @@ class Controller:
                     return None
                 if self.clock() >= self._confirm_deadline:
                     return "모드 선택 시간이 지났습니다."
-                return self._confirm(selected)
+                return self._confirm(selected, cancel_requested)
 
             if self._pending is not None and self._pending == key:
                 return None  # Key repeat neither confirms nor extends the deadline.
@@ -326,8 +331,6 @@ class Controller:
                 return None
             if key in MODES:
                 self._stop()
-                if key == "8" and not self.waist_3dof:
-                    return "허리 3자유도 모델 확인 후 --waist-3dof로 실행하세요."
                 self._pending = key
                 self._confirm_deadline = self.clock() + CONFIRM_SECONDS
                 return f"{self.modes[key][2]} · 4초 이내 Enter로 요청, Esc로 취소."

@@ -13,7 +13,7 @@ import tty
 from contextlib import contextmanager, nullcontext
 
 from .control import (CONFIRM_SECONDS, LAB_RUN_FSM, MAX_STRAIGHT_SPEED, MODES, RUN_IDS,
-                      VELOCITY, Controller, EndSession, display_fsm)
+                      VELOCITY, WAIST_CONFIGURATION, Controller, EndSession, display_fsm)
 
 
 def mode_menu(modes):
@@ -28,7 +28,7 @@ def mode_menu(modes):
         lines.append(f"  {'/'.join(keys):<4}  {name} ({target})")
     lines.extend([
         "  4·5는 FSM 500/501에서 사용",
-        "  8은 허리 3자유도 구성 확인 후 --waist-3dof로 실행할 때 사용",
+        f"  8번 사용 조건 · {WAIST_CONFIGURATION}",
     ])
     return "\n".join(lines)
 
@@ -403,7 +403,8 @@ def main(argv=None):
                         help="공식 G1 LocoClient 서비스 sport (기본 auto와 동일). 구형 loco는 지원하지 않습니다.")
     parser.add_argument("--run-fsm", type=int, choices=RUN_IDS,
                         help="2번 키로 요청할 Run ID (기본: 시작 시 확인된 801/802, 그 외에는 연구실 802)")
-    parser.add_argument("--waist-3dof", action="store_true", help="허리 3자유도 모델의 FSM 501 허용")
+    # Compatibility with commands printed by earlier releases.
+    parser.add_argument("--waist-3dof", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--timed-velocity", action="store_true",
                         help="이전 SetVelocity 방식으로 남은 유효시간을 갱신 (기본: Unitree Move / StopMove)")
     parser.add_argument("--straight-speed", type=float, metavar="M/S",
@@ -458,7 +459,7 @@ def main(argv=None):
                 fsm = client.fsm
                 show(f"오프라인 모의 제어 · 초기 FSM={display_fsm(fsm)}")
             default_run = fsm if fsm in RUN_IDS else LAB_RUN_FSM
-            controller = Controller(client, waist_3dof=args.waist_3dof, run_fsm=args.run_fsm or default_run,
+            controller = Controller(client, run_fsm=args.run_fsm or default_run,
                                     straight_speed=args.straight_speed, timed_velocity=args.timed_velocity)
             interact(controller, live=args.live)
     except EndSession:
