@@ -9,6 +9,7 @@ G1-EDU PC2에서 CPU 이미지 **`g1-jsj:base`**를 한 번 빌드하면 Ubuntu�
 | --- | --- |
 | 키보드 정면 출발에 성공한 모드와 다음 실험 | [11월 26일 501·802 비교와 재시험 항목](docs/teleop-802-501-comparison.md) · [11월 23일 802 관절·오도메트리 기록](docs/teleop-802-evidence.md) |
 | 모터 명령 전 키 배치·정지 확인, FSM 802에서 전진·후진이 안 됐던 이유와 비교 시험 | [보행 전 점검](docs/teleop-preflight.md) · [전후진 명령과 실제 변위 기록](src/g1_teleop/README.md#no-motion) |
+| 외부 PC에서 ROS 2 또는 Cyclone DDS 영상 토픽 직접 보기 | [외부 PC 카메라 뷰어](docs/remote-camera.md) |
 | 머리 D435i 켜기, Windows에서 컬러·깊이를 TTY 또는 RViz2로 확인 | [카메라 수신 검사](docs/camera-check.md) · [Windows Docker 설정](docs/windows-development-pc.md) |
 | 계단 촬영·보정·치수 계산, 발바닥을 놓을 수 있는 위치와 도달 범위 | [측정 명령과 발 디딤 후보 판정](docs/stair-analysis.md) |
 

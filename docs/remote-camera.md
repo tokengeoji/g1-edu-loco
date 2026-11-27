@@ -3,6 +3,40 @@
 
 Windows에서 [외부 개발 컨테이너](windows-development-pc.md)를 실행하고 연구실 스위치에 유선으로 연결한다. G1 카메라가 이미 ROS 2 영상을 발행하는 경우 그 토픽을 구독한다. USB D435i만 보이는 경우 운영 컨테이너에서 `g1 camera start`로 발행을 시작한다. 영상을 발행하는 프로세스는 실험 중 계속 실행한다. [카메라 수신 검사](camera-check.md)
 
+## 외부 PC에서 ROS 2 또는 전방 DDS 영상을 직접 보기
+
+로봇과 같은 유선망에 연결된 **외부 PC의 그래픽 데스크톱**에서 뷰어를 실행한다. `--address`에는 그 PC의 유선 IPv4 주소를 넣고, `--domain`은 영상 발행자와 맞춘다. 예시는 외부 PC `192.168.123.99`, 도메인 `0`이다. 기존 `CYCLONEDDS_URI`가 있으면 그 설정을 사용하므로 선택한 인터페이스가 로봇망에 연결돼 있는지 확인한다. [외부 PC의 DDS 네트워크 설정](development-pc.md)
+
+| 사용할 기능 | 외부 PC의 Python 환경에 필요한 항목 |
+| --- | --- |
+| 영상 창 | NumPy, GUI를 지원하는 OpenCV(`cv2`) |
+| ROS 2 영상 | ROS 2 환경의 `rclpy`, `sensor_msgs`. 파라미터 조회에는 `ros2` CLI도 필요하다. |
+| 네이티브 DDS 영상 | Cyclone DDS Python(`cyclonedds`), H.264 디코더를 제공하는 PyAV(`av`). 발행자가 타입 ID를 제공하지 않을 때는 일치하는 Unitree Python SDK의 IDL도 필요하다. |
+
+**외부 PC · 로컬 터미널에서 저장소 루트로 이동한 뒤 실행**
+
+```bash
+python3 tools/g1_camera_view.py --address 192.168.123.99 --domain 0
+```
+
+ROS 2를 쓴다면 해당 배포판의 환경을 먼저 불러온다. 뷰어는 `sensor_msgs/msg/Image`와 `sensor_msgs/msg/CompressedImage`를 탐색하고, 최근 2초 안에 디코딩한 ROS 프레임을 우선 표시한다. ROS 영상이 끊겼거나 아직 도착하지 않았을 때는 Cyclone DDS의 `rt/frontvideostream`에서 받은 360p H.264 프레임을 사용한다. 터미널의 `Displaying` 뒤에 현재 표시 중인 토픽 이름이 나온다. 창에서 `q` 또는 Esc를 누르면 종료된다. [뷰어 소스](../tools/g1_camera_view.py)
+
+**외부 PC · 특정 ROS 이미지 토픽을 알고 있을 때**
+
+```bash
+python3 tools/g1_camera_view.py --address 192.168.123.99 --topic /g1/head/color/image_raw
+```
+
+**외부 PC · ROS 노드의 문자열 파라미터가 토픽 이름을 지정할 때**
+
+```bash
+python3 tools/g1_camera_view.py --address 192.168.123.99 --ros-param /camera_node image_topic
+```
+
+`/camera_node`와 `image_topic`은 예시다. 실제 노드명과 파라미터명을 넣으면 뷰어가 시작될 때 파라미터에서 토픽 이름을 읽고 해당 토픽을 구독한다.
+
+2026년 11월 27일 별도 ROS 도메인에서 테스트 발행기의 8×8 원본 컬러 영상과 JPEG 압축 영상을 수신했다. 문자열 파라미터로 지정한 토픽에서도 RGB 픽셀의 색상 변환을 확인했다. 루프백 DDS 도메인에서는 Unitree SDK 메시지의 `video360p`에 담은 H.264 테스트 영상을 640×360 컬러 프레임으로 디코딩하고 픽셀값을 확인했다. 같은 날 PC2의 `eth0`, 도메인 0에서는 `rt/lowstate` 발행자가 보였지만 12초간 `rt/frontvideostream` 발행자가 발견되지 않았다. 외부 PC에서 이 뷰어로 실기체 영상을 표시하는 검증은 남아 있다. [이전 전방 DDS 실기체 관측](experiments/2026-11-23-front-rgb/README.md)
+
 ## SSH를 통한 수신
 
 PC2에서 보이는 영상과 상태 토픽을 유선 SSH 연결 하나로 전달한다. PC2 운영 컨테이너는 호스트 네트워크를 사용하며 수신 대기 소켓은 PC2의 `127.0.0.1`에 열린다. 개발 컨테이너 안에서 SSH를 실행해야 같은 컨테이너의 수신기가 포워딩 포트를 열 수 있다.
